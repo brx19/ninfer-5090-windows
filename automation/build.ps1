@@ -17,8 +17,18 @@ function Import-VsEnvironment {
     $VsRoot = & $VsWhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
     if (-not $VsRoot) { throw "Visual Studio Desktop C++ workload not found" }
     $DevCmd = Join-Path $VsRoot "Common7/Tools/VsDevCmd.bat"
-    $EnvironmentLines = & cmd.exe /d /s /c "`"`"$DevCmd`" -arch=x64 -host_arch=x64 >nul && set`""
-    if ($LASTEXITCODE -ne 0) { throw "VsDevCmd failed" }
+    $EnvironmentScript = Join-Path ([IO.Path]::GetTempPath()) ("brx-vs-" + [guid]::NewGuid().ToString("N") + ".cmd")
+    $EnvironmentCommands = @(
+        '@echo off',
+        ('call "' + $DevCmd + '" -arch=x64 -host_arch=x64 >nul'),
+        'if errorlevel 1 exit /b %errorlevel%',
+        'set'
+    )
+    [IO.File]::WriteAllLines($EnvironmentScript, $EnvironmentCommands, [Text.UTF8Encoding]::new($false))
+    try {
+        $EnvironmentLines = & cmd.exe /d /c $EnvironmentScript
+        if ($LASTEXITCODE -ne 0) { throw "VsDevCmd failed" }
+    } finally { Remove-Item -LiteralPath $EnvironmentScript -Force }
     foreach ($Line in $EnvironmentLines) {
         if ($Line -match '^([^=]+)=(.*)$') { [Environment]::SetEnvironmentVariable($Matches[1], $Matches[2], 'Process') }
     }
