@@ -11,6 +11,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from sync import api, git, run
 
 
+def integrate_candidate(repo, branch, sha):
+    candidate = api(f"repos/{repo}/git/ref/heads/{branch}")
+    if candidate["object"]["sha"] != sha:
+        raise ValueError("Candidate branch changed; integration refused")
+    # GitHub enforces ancestry atomically: a concurrent dev commit cannot be overwritten.
+    result = api(f"repos/{repo}/git/refs/heads/dev", "PATCH", {"sha": sha, "force": False})
+    if result.get("object", {}).get("sha") != sha:
+        raise ValueError("Candidate was not integrated")
+    print("Integrated candidate: " + sha)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--sha", required=True)
@@ -51,14 +62,8 @@ def main():
                  "--prerelease", "--title", tag, "--notes-file", str(notes)])
         run(["gh", "release", "upload", tag, str(archives[0]), str(archives[0]) + ".sha256", "--repo", repo, "--clobber"])
     if args.integrate:
-        prs = api(f"repos/{repo}/pulls?state=open&head=brx19:{args.candidate}&base=dev")
-        if len(prs) != 1 or prs[0]["head"]["sha"] != args.sha:
-            raise ValueError("Candidate PR changed; integration refused")
-        result = api(f"repos/{repo}/pulls/{prs[0]['number']}/merge", "PUT",
-                     {"sha": args.sha, "merge_method": "merge", "commit_title": "chore(sync): integrate built candidate"})
-        if not result.get("merged"):
-            raise ValueError("Candidate could not be integrated: " + str(result))
-        print("Integrated candidate: " + result["sha"])
+        integrate_candidate(repo, args.candidate, args.sha)
+
 
 
 if __name__ == "__main__":

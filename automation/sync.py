@@ -121,14 +121,6 @@ def main():
             raise RuntimeError("Existing candidate differs; branch was not overwritten")
         git("checkout", "--detach", previous)
     sha = git("rev-parse", "HEAD").stdout.strip()
-    prs = api(f"repos/{repo}/pulls?state=open&head=brx19:{branch}&base={base}")
-    if not prs:
-        api(f"repos/{repo}/pulls", "POST", {
-            "title": f"chore(sync): headpiece {source_sha[:12]} and dependency refresh",
-            "head": branch, "base": base,
-            "body": "Automated candidate. Built and published as prerelease before integration. "
-                    "GPU qualification is recorded separately. Source: " + source_sha,
-        })
     output("changed", "true")
     output("candidate", branch)
     output("candidate_sha", sha)
