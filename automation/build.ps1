@@ -312,8 +312,10 @@ while ($Pending.Count -gt 0) {
     foreach ($Dependency in Get-PeDependencies $Binary) {
         $Lower = $Dependency.ToLowerInvariant()
         $SystemPath = Join-Path $env:SystemRoot "System32/$Dependency"
-        if ($Lower.StartsWith("api-ms-win-") -or $Lower.StartsWith("ext-ms-win-") -or
-            $SystemDlls -contains $Lower -or Test-Path -LiteralPath $SystemPath) { continue }
+        if ($Lower.StartsWith("api-ms-win-") -or
+            $Lower.StartsWith("ext-ms-win-") -or
+            ($SystemDlls -contains $Lower) -or
+            (Test-Path -LiteralPath $SystemPath)) { continue }
         $Matches = @($RuntimeRoots | ForEach-Object { Join-Path $_ $Dependency } | Where-Object { Test-Path -LiteralPath $_ })
         if ($Matches.Count -eq 0) { throw "Required distributable DLL was not found: $Dependency (imported by $Binary)" }
         $SourceDll = $Matches[0]

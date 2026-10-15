@@ -26,7 +26,7 @@ LEGACY_DEV = ("ninfer-cache2-sccache-windows-x64-msvc14.51.36231-cuda13.3.0"
 LEGACY_FEATURE = ("ninfer-cache2-sccache-windows-x64-msvc14.51.36231-cuda13.3.0"
                   "-sm120a-flags20d1a528e14db04c-deps86b3ef4af4840707-sc0.18.0")
 LEGACY_FLAG_HASH = "20d1a528e14db04c"
-CURRENT_FLAG_HASH = "9af98f12d32c6319"
+CURRENT_FLAG_HASH = "71c51804b0df005a"
 
 
 def _settings(schema=2, scver="0.18.0"):
