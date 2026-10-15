@@ -26,6 +26,8 @@ import sys
 import urllib.error
 import urllib.request
 
+_API_BASE = "https://api.github.com"
+
 
 def _utcnow():
     return _dt.datetime.now(_dt.timezone.utc)
@@ -41,7 +43,13 @@ def _parse_ts(value):
 
 
 def api_call(method, url, token):
-    """Return (status, parsed_json). status < 0 means a non-HTTP transport error."""
+    """Return (status, parsed_json). status < 0 means a non-HTTP transport error.
+
+    ``url`` may be relative (``/repos/...``); it is resolved against the GitHub
+    API base so urllib gets an absolute URL.
+    """
+    if not url.startswith("http://") and not url.startswith("https://"):
+        url = _API_BASE + url
     req = urllib.request.Request(url, method=method, headers={
         "Authorization": f"Bearer {token}",
         "Accept": "application/vnd.github+json",
@@ -77,7 +85,7 @@ def list_snapshots(repo, prefix, token, per_page=100, pages=10):
         status, data = api_call("GET", f"/repos/{repo}/actions/caches?{query}", token)
         if status < 0 or status != 200:
             raise RuntimeError(f"cache list HTTP {status}: {data}")
-        items = data.get("caches", [])
+        items = data.get("actions_caches", [])
         entries.extend(items)
         if len(items) < per_page:
             break
@@ -87,7 +95,10 @@ def list_snapshots(repo, prefix, token, per_page=100, pages=10):
 def select_deletions(entries, keep, grace_minutes, now):
     """Return (to_delete, kept) — the oldest entries beyond ``keep`` outside the grace window."""
     def sort_key(e):
-        ts = _parse_ts(e.get("last_used")) or _parse_ts(e.get("created_at")) or _dt.datetime.min.replace(tzinfo=_dt.timezone.utc)
+        ts = (_parse_ts(e.get("last_accessed_at"))
+              or _parse_ts(e.get("last_used"))
+              or _parse_ts(e.get("created_at"))
+              or _dt.datetime.min.replace(tzinfo=_dt.timezone.utc))
         return ts
     ranked = sorted(entries, key=sort_key, reverse=True)
     to_delete, kept = [], []
@@ -136,7 +147,8 @@ def main():
         to_delete, kept = select_deletions(entries, args.keep, args.grace_minutes, now)
         for e in kept:
             summary["kept"].append({"id": e.get("id"), "key": e.get("key"),
-                                    "size": e.get("size_in_bytes"), "last_used": e.get("last_used")})
+                                    "size": e.get("size_in_bytes"),
+                                    "last_used": e.get("last_accessed_at") or e.get("last_used")})
         for e in to_delete:
             summary["skipped_recent"].append({"id": e.get("id"), "key": e.get("key")})
         if args.dry_run:
