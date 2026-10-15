@@ -26,8 +26,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      pull-requests: write
-      actions: write
     outputs:
       changed: ${{ steps.sync.outputs.changed }}
       candidate: ${{ steps.sync.outputs.candidate }}
@@ -37,14 +35,16 @@ jobs:
         with:
           ref: dev
           fetch-depth: 0
-          token: ${{ secrets.BRX_SYNC_TOKEN || github.token }}
+          token: ${{ github.token }}
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: '3.12'
+      - name: Verify synchronization and packaging guards
+        run: python automation/test_automation.py -q
       - name: Synchronize headpiece and pin dependencies
         id: sync
         env:
-          GH_TOKEN: ${{ secrets.BRX_SYNC_TOKEN || github.token }}
+          GH_TOKEN: ${{ github.token }}
           FORCE_BUILD: ${{ inputs.force_build || false }}
         run: |
           args=()
@@ -167,7 +167,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      pull-requests: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -183,7 +182,7 @@ jobs:
           path: dist
       - name: Promote GPU-qualified release and integrate candidate
         env:
-          GH_TOKEN: ${{ secrets.BRX_SYNC_TOKEN || github.token }}
+          GH_TOKEN: ${{ github.token }}
           CANDIDATE_SHA: ${{ needs.sync.outputs.sha }}
           CANDIDATE_BRANCH: ${{ needs.sync.outputs.candidate }}
           GPU_RESULT: ${{ needs.gpu.result }}
