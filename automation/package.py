@@ -36,7 +36,7 @@ def package(stage, output, source_sha, lock, run_id):
     (stage / "BUILD-MANIFEST.json").write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
     (stage / "README-BRX.txt").write_text(
         "NInfer Windows RTX 5090 runtime candidate.\n"
-        "Requires Windows x64, a CUDA 13.3-compatible NVIDIA driver, and Microsoft Visual C++ x64 Redistributable.\n"
+        "Requires Windows x64, a CUDA 13.3-compatible NVIDIA driver. The MSVC runtime is statically linked; no separate Visual C++ redistributable is needed.\n"
         "GPU qualification is separate; this manifest records build status only.\n"
         "No model or maintainer launchers are bundled. Use JIT-Gateway's explicit model profile.\n"
         "FFmpeg uses the LGPL shared 9.0 build; corresponding source is available from the pinned BtbN release.\n"

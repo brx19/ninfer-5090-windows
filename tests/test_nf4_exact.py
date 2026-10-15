@@ -42,7 +42,9 @@ checked = 0
 for word in divisors:
     valid = word != 0 and word < 0x7F800000
     d = fp32(word) if valid else None
-    valid = valid and Fraction(448) / d < overflow
+    # d is None exactly when valid is False, so the guard changes nothing at runtime; it
+    # keeps the division type-correct (Fraction / (Any | None) is not a defined operation).
+    valid = valid and d is not None and Fraction(448) / d < overflow
     (got_valid,) = struct.unpack_from("<I", data, offset)
     offset += 4
     assert got_valid == valid, hex(word)

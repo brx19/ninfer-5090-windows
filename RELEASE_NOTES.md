@@ -177,6 +177,12 @@ that earlier builds shipped.
 | `start_nvidia_v3_dflash2_vision.bat` | NVIDIA | DFlash2 (9) | yes | 262,144 | **314 tok/s** | 44.9% |
 | `start_nvidia_v3_mtp4_vision.bat` | NVIDIA | MTP (4) | yes | 262,144 | 173 tok/s | 47.7% |
 
+This file is the fork's canonical profile transcription site: the pre-commit profile-consistency
+gate (`tools/release/check_profile_consistency.py`) enforces that this table transcribes
+`tools/release/profiles.py` exactly. The shared `README.md` is upstream-owned documentation and
+deliberately carries no fork-specific table; the gate binds it only while it references the
+shipped launchers.
+
 Every number was measured on an RTX 5090 with the exact arguments the launcher passes; every context
 ceiling is the highest value the engine accepts for that configuration -- the next step up is refused,
 not degraded. Decode is the column with the caveat, measured on 2026-10-13:

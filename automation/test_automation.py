@@ -170,6 +170,21 @@ class SyncTests(unittest.TestCase):
         second = self.invoke()
         self.assertEqual(first["candidate_sha"], second["candidate_sha"])
 
+    def test_divergent_candidate_is_never_overwritten(self):
+        first = self.invoke()
+        # Someone else advanced the candidate branch on the remote with a different tree.
+        probe = self.root / "probe"
+        subprocess.run(["git", "clone", str(self.origin), str(probe)], check=True, capture_output=True)
+        git_at(probe, "checkout", first["candidate"])
+        (probe / "divergence.txt").write_text("someone else's candidate work\n")
+        git_at(probe, "add", ".")
+        git_at(probe, "commit", "-m", "foreign candidate update")
+        git_at(probe, "push", "origin", first["candidate"])
+        with self.assertRaisesRegex(RuntimeError, "Existing candidate differs"):
+            self.invoke()
+        # The foreign tree is still intact on the remote: refusal means no rewrite.
+        git_at(self.origin, "cat-file", "-e", first["candidate"] + ":divergence.txt")
+
     def test_forced_rebuild_has_a_new_commit(self):
         first = self.invoke()
         self.integrate(first)
@@ -230,6 +245,63 @@ class PackageTests(unittest.TestCase):
     def test_branch_identity_rejects_invalid_sha(self):
         with self.assertRaises(ValueError):
             sync.candidate_name("dev;rm", {})
+
+
+class WorkflowGatingTests(unittest.TestCase):
+    """The release workflow must not publish, qualify or integrate anything it did not build.
+
+    The gates are structural: a candidate-release that runs after a skipped build has no
+    artifacts to download and turns an idle synchronization into a red run, and a publish that
+    pins the triggering push rather than the candidate commit silently detaches release
+    provenance from the bytes that were built.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        root = Path(__file__).resolve().parents[1]
+        cls.build_wf = (root / ".github" / "workflows" / "brx-sync-build.yml").read_text(encoding="utf-8")
+        cls.gpu_wf = (root / ".github" / "workflows" / "gpu.yml").read_text(encoding="utf-8")
+
+    @staticmethod
+    def job_section(text: str, job: str) -> str:
+        lines = text.splitlines()
+        start = next(i for i, line in enumerate(lines) if line.startswith(f"  {job}:"))
+        end = len(lines)
+        for j in range(start + 1, len(lines)):
+            if lines[j].startswith("  ") and not lines[j].startswith("    "):
+                end = j
+                break
+        return "\n".join(lines[start:end])
+
+    def test_candidate_release_requires_a_new_candidate(self):
+        section = self.job_section(self.build_wf, "candidate-release")
+        self.assertIn("if: needs.sync.outputs.changed == 'true'", section)
+
+    def test_gpu_qualification_requires_a_new_candidate_and_the_flag(self):
+        section = self.job_section(self.build_wf, "gpu")
+        self.assertIn("needs.sync.outputs.changed == 'true'", section)
+        self.assertIn("vars.ENABLE_GPU_QUALIFICATION == 'true'", section)
+
+    def test_gpu_runner_labels_match_the_suite_workflow(self):
+        # Two workflows sharing one card must name it the same way, or one of them queues
+        # forever on a label no registered runner carries.
+        build_gpu = self.job_section(self.build_wf, "gpu")
+        suite = self.job_section(self.gpu_wf, "suite")
+        self.assertIn("runs-on: [self-hosted, windows, gpu-5090]", build_gpu)
+        self.assertIn("runs-on: [self-hosted, windows, gpu-5090]", suite)
+
+    def test_integration_requires_successful_build_and_publish(self):
+        section = self.job_section(self.build_wf, "integrate")
+        self.assertIn("needs.build.result == 'success'", section)
+        self.assertIn("needs.candidate-release.result == 'success'", section)
+
+    def test_publish_provenance_uses_the_candidate_sha(self):
+        # Provenance is the candidate commit, not the triggering push: a push to dev can
+        # predate the candidate that merge produced.
+        for line in self.build_wf.splitlines():
+            if "publish.py" in line:
+                self.assertNotIn("github.sha", line)
+        self.assertIn("CANDIDATE_SHA: ${{ needs.sync.outputs.sha }}", self.build_wf)
 
 
 if __name__ == "__main__":
