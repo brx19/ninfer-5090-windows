@@ -240,7 +240,7 @@ jobs:
         env:
           NINFER_CACHE_ROOT: D:\ninfer-cache
           NINFER_SCCACHE: D:\ninfer-cache\sccache-bin\sccache.exe
-          NINFER_SCCACHE_CUDA: ${{ inputs.cuda_cache && 'on' || 'off' }}
+          NINFER_SCCACHE_CUDA: ${{ inputs.cuda_cache == 'true' && 'on' || 'off' }}
         run: ./automation/build.ps1
       - name: Report cache metrics
         if: always()
