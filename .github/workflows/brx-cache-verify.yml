@@ -193,7 +193,7 @@ jobs:
           $Lines.Add("| dependency fingerprint | $( & $Val 'dep_hash') |")
           $Lines.Add("| FFmpeg SHA256 | $( & $Val 'ffmpeg_sha256') |")
           $Lines.Add("| vcpkg revision | $( & $Val 'vcpkg_sha') |")
-          $Lines.Add("| cuda_cache routing | $((if ($env:NINFER_SCCACHE_CUDA -eq 'on') { 'sccache' } else { 'nvcc (bypass)' })) |")
+          $Lines.Add("| cuda_cache routing | $(if ($env:NINFER_SCCACHE_CUDA -eq 'on') { 'sccache' } else { 'nvcc (bypass)' }) |")
           $Metrics = $null
           if (Test-Path "build/cache-metrics.json") { $Metrics = Get-Content -LiteralPath "build/cache-metrics.json" -Raw | ConvertFrom-Json }
           if ($null -ne $Metrics) {
