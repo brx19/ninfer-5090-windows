@@ -75,7 +75,7 @@ jobs:
         with:
           cuda: '13.3.0'
           method: network
-          sub-packages: '["nvcc", "crt", "cudart", "thrust", "nvrtc", "nvrtc_dev", "nvjitlink", "nvfatbin", "cublas", "cublas_dev", "visual_studio_integration"]'
+          sub-packages: '["nvcc", "crt", "cudart", "thrust", "nvrtc", "nvrtc_dev", "nvjitlink", "nvfatbin", "nvtx", "visual_studio_integration"]'
       - name: Validate Python automation
         shell: pwsh
         run: python -m compileall -q automation
