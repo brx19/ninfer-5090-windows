@@ -84,6 +84,10 @@ def main():
     git("fetch", f"https://github.com/{settings['source_repository']}.git", settings["source_branch"])
     source_sha = git("rev-parse", "FETCH_HEAD").stdout.strip()
     lock = resolve_dependencies(settings)
+    automation_tree = git("ls-tree", "-r", "HEAD", "--", "automation", ".github/workflows/brx-sync-build.yml").stdout
+    automation_entries = "\n".join(line for line in automation_tree.splitlines()
+                                   if not line.endswith("\tautomation/dependencies.lock.json"))
+    lock["automation_sha256"] = hashlib.sha256(automation_entries.encode()).hexdigest()
     lock["headpiece_sha"] = source_sha
     lock["upstream_master_sha"] = api(f"repos/{settings['upstream_repository']}/commits/{settings['upstream_branch']}")["sha"]
     ancestor = git("merge-base", "--is-ancestor", source_sha, "HEAD", check=False)
@@ -102,9 +106,17 @@ def main():
     merged = git("merge", "--no-edit", source_sha, check=False)
     if merged.returncode:
         conflicts = git("diff", "--name-only", "--diff-filter=U", check=False).stdout
-        report_conflict(repo, source_sha, merged.stdout + merged.stderr + "\n" + conflicts)
-        git("merge", "--abort", check=False)
-        raise RuntimeError("Merge stopped; no changes pushed to dev")
+        conflict_paths = conflicts.splitlines()
+        if not conflict_paths or any(not name.startswith(".github/workflows/") for name in conflict_paths):
+            report_conflict(repo, source_sha, merged.stdout + merged.stderr + "\n" + conflicts)
+            git("merge", "--abort", check=False)
+            raise RuntimeError("Merge stopped; no changes pushed to dev")
+        git("restore", "--source=" + base_sha, "--staged", "--worktree", "--", ".github/workflows")
+        git("commit", "--no-edit")
+    # This fork owns its workflows. Preserve them when merging engine changes, so the
+    # standard Actions token never needs permission to import upstream workflow edits.
+    if git("ls-tree", "-r", "--name-only", base_sha, "--", ".github/workflows").stdout.strip():
+        git("restore", "--source=" + base_sha, "--staged", "--worktree", "--", ".github/workflows")
     path.write_text(json.dumps(lock, indent=2) + "\n", encoding="utf-8")
     git("add", "automation/dependencies.lock.json")
     if git("diff", "--cached", "--quiet", check=False).returncode:
