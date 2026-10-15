@@ -50,7 +50,7 @@ def test_the_winsock_consumers_all_receive_the_dependency() -> None:
     # for its next build; asserting the set (not individual files) is what forces the
     # re-derivation when that happens.
     users = {
-        str(p.relative_to(REPO))
+        p.relative_to(REPO).as_posix()
         for source in ("src", "apps")
         for p in (REPO / source).rglob("*.cpp")
         if winsock_includes(p)
