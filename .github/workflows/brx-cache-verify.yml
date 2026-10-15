@@ -69,10 +69,10 @@ jobs:
           $VsRoot = & $VsWhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
           if (-not $VsRoot) { throw "Visual Studio Desktop C++ workload not found" }
           $MsvcVersion = (Get-ChildItem (Join-Path $VsRoot "VC\Tools\MSVC") | Sort-Object { [version]$_.Name } -Descending | Select-Object -First 1).Name
-          $FlagFiles = @(git ls-files -- 'CMakeLists.txt' 'cmake/*' 'apps/CMakeLists.txt' 'src/CMakeLists.txt' 'src/*/CMakeLists.txt' 'src/*/*/CMakeLists.txt' 'tests/CMakeLists.txt' 'bench/CMakeLists.txt' 'third_party/*/CMakeLists.txt' 'automation/build.ps1')
+          $FlagFiles = @((git ls-files -- 'CMakeLists.txt' 'cmake/*' 'apps/CMakeLists.txt' 'src/CMakeLists.txt' 'src/*/CMakeLists.txt' 'src/*/*/CMakeLists.txt' 'tests/CMakeLists.txt' 'bench/CMakeLists.txt' 'third_party/*/CMakeLists.txt' 'automation/build.ps1') | Sort-Object)
           if ($FlagFiles.Count -eq 0) { throw "Flag fingerprint found no CMake files; refusing to compute a cache key" }
-          $FlagHash = [BitConverter]::ToString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes(($FlagFiles | ForEach-Object { (Get-FileHash -LiteralPath $_ -Algorithm SHA256).Hash }) -join "|"))).Substring(0, 16).ToLowerInvariant()
-          $DepHash = [BitConverter]::ToString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes("$($Lock.vcpkg_sha)$($Lock.ffmpeg.sha256)$($Lock.cuda_version)"))).Substring(0, 16).ToLowerInvariant()
+          $FlagHash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes(($FlagFiles | ForEach-Object { (Get-FileHash -LiteralPath $_ -Algorithm SHA256).Hash }) -join "|"))).ToLowerInvariant().Substring(0, 16)
+          $DepHash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes("$($Lock.vcpkg_sha)$($Lock.ffmpeg.sha256)$($Lock.cuda_version)"))).ToLowerInvariant().Substring(0, 16)
           $Os = $env:RUNNER_OS.ToLowerInvariant()
           $Arch = $env:RUNNER_ARCH.ToLowerInvariant()
           $Schema = $Settings.build_cache.schema
@@ -91,7 +91,7 @@ jobs:
           Set-Content -LiteralPath $env:GITHUB_OUTPUT -Value $Out
       - name: Restore compiler caches
         id: compiler-caches
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: |
             D:\ninfer-cache\sccache-cpp
@@ -103,21 +103,21 @@ jobs:
             ${{ steps.cache-keys.outputs.sccache_restore3 }}
       - name: Restore vcpkg checkout
         id: vcpkg-checkout
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: D:\ninfer-cache\vcpkg
-          key: ${{ steps.cache-keys.outputs.vpkgsrc_key }}
+          key: ${{ steps.cache-keys.outputs.vcpkgsrc_key }}
       - name: Restore vcpkg binary cache
         id: vcpkg-binary
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
-          path: D:\ninfer-cache\vpkg-bin
-          key: ${{ steps.cache-keys.outputs.vpkgbin_key }}
+          path: D:\ninfer-cache\vcpkg-bin
+          key: ${{ steps.cache-keys.outputs.vcpkgbin_key }}
           restore-keys: |
-            ${{ steps.cache-keys.outputs.vpkgbin_restore }}
+            ${{ steps.cache-keys.outputs.vcpkgbin_restore }}
       - name: Restore FFmpeg archive
         id: ffmpeg
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: D:\ninfer-cache\ffmpeg
           key: ${{ steps.cache-keys.outputs.ffmpeg_key }}
@@ -142,6 +142,11 @@ jobs:
       - name: Report cache metrics
         if: always()
         shell: pwsh
+        env:
+          COMPILER_CACHE_HIT: ${{ steps['compiler-caches'].outputs['cache-hit'] }}
+          VCPKG_SOURCE_CACHE_HIT: ${{ steps['vcpkg-checkout'].outputs['cache-hit'] }}
+          VCPKG_BINARY_CACHE_HIT: ${{ steps['vcpkg-binary'].outputs['cache-hit'] }}
+          FFMPEG_CACHE_HIT: ${{ steps['ffmpeg'].outputs['cache-hit'] }}
         run: |
           $Lines = New-Object System.Collections.Generic.List[string]
           $Lines.Add("## NInfer cache verification run")
@@ -158,13 +163,13 @@ jobs:
           } else {
               $Lines.Add("no cache metrics written")
           }
-          foreach ($Step in @("compiler-caches", "vcpkg-checkout", "vcpkg-binary", "ffmpeg")) {
-              $Prop = $steps.PSObject.Properties[$Step]
-              if ($null -ne $Prop) { $Lines.Add("$Step restore cache-hit=" + $Prop.Value.outputs["cache-hit"]) }
+          foreach ($Name in @("COMPILER", "VCPKG_SOURCE", "VCPKG_BINARY", "FFMPEG")) {
+              $Hit = [string][System.Environment]::GetEnvironmentVariable($Name + "_CACHE_HIT")
+              if ($Hit.Trim().Length -gt 0) { $Lines.Add("$Name restore cache-hit=$Hit") } else { $Lines.Add("$Name restore cache-hit=unavailable") }
           }
           $Lines | Set-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Encoding UTF8
       - name: Save compiler caches
-        if: success()
+        if: success() && inputs.corrupt_cache != 'true' && steps['compiler-caches'].outputs['cache-hit'] != 'true'
         continue-on-error: true
         uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
@@ -173,21 +178,21 @@ jobs:
             D:\ninfer-cache\sccache-cuda
           key: ${{ steps.cache-keys.outputs.sccache_key }}
       - name: Save vcpkg checkout
-        if: success()
+        if: success() && inputs.corrupt_cache != 'true' && steps['vcpkg-checkout'].outputs['cache-hit'] != 'true'
         continue-on-error: true
         uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
-          path: D:\ninfer-cache\vpkg
-          key: ${{ steps.cache-keys.outputs.vpkgsrc_key }}
+          path: D:\ninfer-cache\vcpkg
+          key: ${{ steps.cache-keys.outputs.vcpkgsrc_key }}
       - name: Save vcpkg binary cache
-        if: success()
+        if: success() && inputs.corrupt_cache != 'true' && steps['vcpkg-binary'].outputs['cache-hit'] != 'true'
         continue-on-error: true
         uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
-          path: D:\ninfer-cache\vpkg-bin
-          key: ${{ steps.cache-keys.outputs.vpkgbin_key }}
+          path: D:\ninfer-cache\vcpkg-bin
+          key: ${{ steps.cache-keys.outputs.vcpkgbin_key }}
       - name: Save FFmpeg archive
-        if: success()
+        if: success() && inputs.corrupt_cache != 'true' && steps['ffmpeg'].outputs['cache-hit'] != 'true'
         continue-on-error: true
         uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:

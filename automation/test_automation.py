@@ -305,5 +305,228 @@ class WorkflowGatingTests(unittest.TestCase):
         self.assertIn("CANDIDATE_SHA: ${{ needs.sync.outputs.sha }}", self.build_wf)
 
 
+class BuildCacheContractTests(unittest.TestCase):
+    """Regression tests for the cross-run build-cache contract.
+
+    The first cached runs (PR #2) failed on five confirmed defects: a generated
+    cache-key output that no consuming expression referenced, PowerShell that indexed
+    a non-existent ``$steps`` variable, restore/save steps that pointed at different
+    directories, a bare ``actions/cache`` step paired with an explicit
+    ``actions/cache/save`` (which cannot disable the implicit post-save), and a
+    fingerprint formatted with ``[BitConverter]::ToString`` that produced a
+    hyphen-separated 16-character string. These tests read the committed workflow
+    files -- the source of truth for what the Windows runner executes -- and fail if
+    any of those defects is reintroduced.
+    """
+
+    WORKFLOWS = ("brx-sync-build.yml", "brx-cache-verify.yml")
+
+    @classmethod
+    def setUpClass(cls):
+        import yaml
+        root = Path(__file__).resolve().parents[1] / ".github" / "workflows"
+        cls.raw = {}
+        cls.doc = {}
+        for name in cls.WORKFLOWS:
+            text = (root / name).read_text(encoding="utf-8")
+            cls.raw[name] = text
+            cls.doc[name] = yaml.safe_load(text)
+
+    def _steps(self, name):
+        return self.doc[name]["jobs"]["build"]["steps"]
+
+    def _step(self, name, step_name):
+        for step in self._steps(name):
+            if step.get("name") == step_name:
+                return step
+        self.fail(f"{name}: step {step_name!r} not found")
+
+    @staticmethod
+    def _key_outputs(run_block):
+        # Every entry in the "Compute cache keys" $Out array is a quoted
+        # "name=value" line; those names are the outputs downstream expressions may
+        # reference as steps.cache-keys.outputs.<name>.
+        return set(re.findall(r'(?m)^\s+"([a-z0-9_]+)=[^"]*"', run_block))
+
+    def test_every_consumed_cache_key_is_generated(self):
+        # The "Input required and not supplied: key" failure: a consuming expression
+        # named an output the compute step never emits (the vpkgsrc_key typo).
+        for name in self.WORKFLOWS:
+            generated = self._key_outputs(self._step(name, "Compute cache keys")["run"])
+            self.assertGreater(len(generated), 0,
+                               f"{name}: no cache-key output entries in the compute step")
+            consumed = set(re.findall(r"steps\.cache-keys\.outputs\.([A-Za-z0-9_]+)", self.raw[name]))
+            self.assertEqual(consumed - generated, set(),
+                             f"{name}: consumed cache-key outputs the compute step never "
+                             f"generates: {sorted(consumed - generated)}")
+
+    def test_no_broken_vpkg_token_remains(self):
+        # "vcpkg" does not contain "vpkg" as a substring, so any "vpkg" hit can only be
+        # a broken name (vpkgsrc_key, vpkgbin_key, vpkg-bin, vpkg).
+        for name in self.WORKFLOWS:
+            self.assertNotIn("vpkg", self.raw[name], f"{name}: broken 'vpkg' token present")
+
+    def test_restore_and_save_paths_match_per_layer(self):
+        # A restore that reads one directory and a save that writes another means the
+        # save republishes a directory the restore never validated.
+        layers = ("compiler caches", "vcpkg checkout", "vcpkg binary cache", "FFmpeg archive")
+        for name in self.WORKFLOWS:
+            for layer in layers:
+                rpath = self._step(name, "Restore " + layer)["with"]["path"]
+                spath = self._step(name, "Save " + layer)["with"]["path"]
+                self.assertEqual(rpath, spath,
+                                 f"{name}: '{layer}' restore path {rpath!r} != save path {spath!r}")
+
+    def test_vcpkg_binary_path_is_vcpkg_bin(self):
+        # build.ps1 populates D:\ninfer-cache\vcpkg-bin; a save/restore aimed at a
+        # different directory caches an empty (or wrong) tree.
+        for name in self.WORKFLOWS:
+            for step in (self._step(name, "Restore vcpkg binary cache"),
+                         self._step(name, "Save vcpkg binary cache")):
+                self.assertEqual(step["with"]["path"], "D:\\ninfer-cache\\vcpkg-bin",
+                                 f"{name}: {step['name']} uses {step['with']['path']!r}")
+
+    def test_restore_steps_use_the_restore_action(self):
+        # A bare actions/cache step carries an implicit post-job save that explicit save
+        # steps cannot disable. Restore must use actions/cache/restore (no post hook) and
+        # save must use actions/cache/save; the bare action must not appear at all.
+        for name in self.WORKFLOWS:
+            for step in self._steps(name):
+                uses = step.get("uses", "")
+                if not uses.startswith("actions/cache"):
+                    continue
+                if step.get("name", "").startswith("Restore "):
+                    self.assertTrue(uses.startswith("actions/cache/restore@"),
+                                    f"{name}: {step['name']!r} uses {uses!r}, not "
+                                    f"actions/cache/restore (no implicit post-save)")
+                elif step.get("name", "").startswith("Save "):
+                    self.assertTrue(uses.startswith("actions/cache/save@"),
+                                    f"{name}: {step['name']!r} uses {uses!r}, not actions/cache/save")
+            self.assertNotRegex(self.raw[name], r"actions/cache@(?!/)",
+                                f"{name}: bare actions/cache (implicit post-save) is present")
+
+    def test_fingerprints_use_clean_hex_and_a_sorted_file_list(self):
+        # [BitConverter]::ToString yields a hyphen-separated string, so its 16-char
+        # prefix was not a clean hex fingerprint; the file list must also be sorted so
+        # the hash is stable across runners with different git index ordering.
+        for name in self.WORKFLOWS:
+            self.assertNotIn("[BitConverter]::ToString", self.raw[name],
+                             f"{name}: hyphen-separated fingerprint (BitConverter::ToString)")
+            self.assertIn("[Convert]::ToHexString", self.raw[name],
+                          f"{name}: clean hex fingerprint (Convert::ToHexString) missing")
+            self.assertIn("| Sort-Object)", self.raw[name],
+                          f"{name}: fingerprint file list is not sorted deterministically")
+
+    def test_schema_version_does_not_reuse_broken_entries(self):
+        settings = json.loads((Path(__file__).resolve().parents[1] / "automation" /
+                               "settings.json").read_text(encoding="utf-8"))
+        self.assertGreaterEqual(settings["build_cache"]["schema"], 2,
+                                "cache schema must be >= 2 so corrected key generation "
+                                "cannot reuse entries made under the broken key scheme")
+
+    def test_metrics_step_reads_mapped_env_not_the_steps_context(self):
+        # The "$steps.PSObject.Properties" access raised "Cannot index into a null
+        # array" because the GitHub steps context is not a PowerShell variable. The
+        # cache-hit outputs must instead be mapped into step environment variables.
+        for name in self.WORKFLOWS:
+            self.assertNotIn("$steps.PSObject.Properties", self.raw[name],
+                             f"{name}: PowerShell cannot index the GitHub steps context")
+            metrics = self._step(name, "Report cache metrics")
+            self.assertIn('[System.Environment]::GetEnvironmentVariable($Name + "_CACHE_HIT")',
+                          metrics["run"],
+                          f"{name}: metrics step does not read cache-hit via the "
+                          f"mapped environment variables")
+            env = json.dumps(metrics.get("env", {}))
+            for step_id in ("compiler-caches", "vcpkg-checkout", "vcpkg-binary", "ffmpeg"):
+                self.assertIn(f"steps['{step_id}'].outputs['cache-hit']", env,
+                              f"{name}: metrics step does not map the {step_id} cache-hit "
+                              f"into an environment variable")
+
+    def test_save_steps_skip_on_exact_hit_and_failed_builds(self):
+        # A save that runs after an exact-hit restore republishes bytes already in the
+        # cache; a save on a failed build publishes unverified contents.
+        for name in self.WORKFLOWS:
+            for step in self._steps(name):
+                if not step.get("name", "").startswith("Save "):
+                    continue
+                if "actions/cache" not in step.get("uses", ""):
+                    continue
+                cond = step.get("if", "")
+                self.assertIn("success()", cond,
+                              f"{name}: {step['name']} is not guarded by success()")
+                self.assertIn("cache-hit'] != 'true'", cond,
+                              f"{name}: {step['name']} does not skip on an exact cache hit")
+
+    def test_corruption_run_never_saves(self):
+        # The corruption scenario (R6) must not republish the cache it just corrupted.
+        name = "brx-cache-verify.yml"
+        found = 0
+        for step in self._steps(name):
+            if not step.get("name", "").startswith("Save "):
+                continue
+            if "actions/cache" not in step.get("uses", ""):
+                continue
+            found += 1
+            self.assertIn("inputs.corrupt_cache != 'true'", step.get("if", ""),
+                          f"{name}: {step['name']} can save during the corruption run and "
+                          f"poison the production cache")
+        self.assertGreater(found, 0, f"{name}: no cache save steps found to check")
+
+    def test_metrics_rendering_empty_missed_hit_partial(self):
+        # Runs the committed metrics PowerShell under mocked empty / missed / exact-hit
+        # / partially-completed steps and checks the rendered report. This is the direct
+        # regression for the "$steps" exception: a missing metric must render as
+        # "unavailable", never raise.
+        import os
+        import shutil
+        import subprocess
+        import tempfile
+        pwsh = os.environ.get("NINFER_TEST_PWSH") or shutil.which("pwsh")
+        if not pwsh or not os.path.exists(pwsh):
+            self.skipTest("pwsh is not available; the metrics step runs on the Windows "
+                          "runner where PowerShell Core is preinstalled")
+        scenarios = (
+            ("empty", ("", "", "", ""),
+             {"COMPILER": "unavailable", "VCPKG_SOURCE": "unavailable",
+              "VCPKG_BINARY": "unavailable", "FFMPEG": "unavailable"}),
+            ("missed", ("false", "false", "false", "false"),
+             {"COMPILER": "false", "VCPKG_SOURCE": "false",
+              "VCPKG_BINARY": "false", "FFMPEG": "false"}),
+            ("exact_hit", ("true", "true", "true", "true"),
+             {"COMPILER": "true", "VCPKG_SOURCE": "true",
+              "VCPKG_BINARY": "true", "FFMPEG": "true"}),
+            ("partial", ("true", "false", "", ""),
+             {"COMPILER": "true", "VCPKG_SOURCE": "false",
+              "VCPKG_BINARY": "unavailable", "FFMPEG": "unavailable"}),
+        )
+        env_names = ("COMPILER_CACHE_HIT", "VCPKG_SOURCE_CACHE_HIT",
+                     "VCPKG_BINARY_CACHE_HIT", "FFMPEG_CACHE_HIT")
+        for name in self.WORKFLOWS:
+            run_block = self._step(name, "Report cache metrics")["run"]
+            prefix = "restore " if "restore cache-hit=" in run_block else ""
+            for label, values, expected in scenarios:
+                with tempfile.TemporaryDirectory() as tmp:
+                    summary = os.path.join(tmp, "summary.md")
+                    full = dict(os.environ)
+                    for var, val in zip(env_names, values):
+                        full[var] = val
+                    full["GITHUB_STEP_SUMMARY"] = summary
+                    full["GITHUB_OUTPUT"] = os.path.join(tmp, "github_output")
+                    proc = subprocess.run(
+                        [pwsh, "-NoProfile", "-NonInteractive", "-Command", run_block],
+                        cwd=tmp, env=full, capture_output=True, text=True,
+                        encoding="utf-8", timeout=180, check=False)
+                    self.assertEqual(proc.returncode, 0,
+                                     f"{name} [{label}]: metrics step raised an "
+                                     f"exception (regression of the $steps bug):\n"
+                                     f"{proc.stderr}")
+                    rendered = Path(summary).read_text(encoding="utf-8")
+                    for cache_name, value in expected.items():
+                        self.assertIn(f"{cache_name} {prefix}cache-hit={value}", rendered,
+                                      f"{name} [{label}]: expected "
+                                      f"'{cache_name} {prefix}cache-hit={value}' but the "
+                                      f"rendered summary was:\n{rendered}")
+
+
 if __name__ == "__main__":
     unittest.main()
