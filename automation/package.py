@@ -32,7 +32,7 @@ def package(stage, output, source_sha, lock, run_id):
                 "dependencies": lock, "cuda_architecture": "120a", "build_type": "Release",
                 "cuda_compiler": os.environ.get("BRX_NINFER_NVCC_VERSION"),
                 "msvc": os.environ.get("BRX_NINFER_MSVC_VERSION"), "gpu_qualified": False,
-                "workflow_run_id": run_id}
+                "workflow_run_id": run_id, "loader_smoke": os.environ.get("BRX_NINFER_LOADER_SMOKE", "not_run")}
     (stage / "BUILD-MANIFEST.json").write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
     (stage / "README-BRX.txt").write_text(
         "NInfer Windows RTX 5090 runtime candidate.\n"
