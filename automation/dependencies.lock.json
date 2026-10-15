@@ -1,0 +1,12 @@
+{
+  "cuda_version": "13.3.0",
+  "vcpkg_sha": "20ceb8adbf0504d4b0d5e4058a32f9d4fc896391",
+  "ffmpeg": {
+    "name": "ffmpeg-n9.0-latest-win64-lgpl-shared-9.0.zip",
+    "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n9.0-latest-win64-lgpl-shared-9.0.zip",
+    "sha256": "70f5d603690ad245a4d8a90f99afd90452da6eb9fd2f9fe78d2a6e479a41ac3c"
+  },
+  "automation_sha256": "4d7701ecde93bd738921961cd85475006e6a1ea0f18e5a8561af75164d64d1b1",
+  "headpiece_sha": "9ff1d7b528973d43a0930499189a60fe536b35b7",
+  "upstream_master_sha": "81c8ce093b2c1646a87566a8e59d807fcf0ec95c"
+}
