@@ -1,3 +1,4 @@
+// cache-incremental-test: no-op marker (GitHub Actions sccache warm-incremental verification)
 #include "ops/linear/projection/q8/q8_shapes.h"
 
 namespace ninfer::ops::detail {
