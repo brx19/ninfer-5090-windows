@@ -1,4 +1,4 @@
-﻿find_package(CUDAToolkit REQUIRED)
+find_package(CUDAToolkit REQUIRED)
 find_package(Threads REQUIRED)
 if(MSVC)
   # Windows: FFmpeg dev binaries are staged into ffmpeg/ (see build_windows.bat).
