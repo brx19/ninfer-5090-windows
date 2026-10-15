@@ -6,7 +6,7 @@
     "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n9.0-latest-win64-lgpl-shared-9.0.zip",
     "sha256": "70f5d603690ad245a4d8a90f99afd90452da6eb9fd2f9fe78d2a6e479a41ac3c"
   },
-  "automation_sha256": "8fce4706c733f96823e226b34c967aae3848dd8414c08a93577bd9f9f23423e3",
-  "headpiece_sha": "9ff1d7b528973d43a0930499189a60fe536b35b7",
+  "automation_sha256": "bc28e7477840bd17986633af4c55047bb761b6fa680bd1fcbd17d7cca9de893a",
+  "headpiece_sha": "c6f6a5ee6b3be8ebec69f32958d49b9d7ff43fe7",
   "upstream_master_sha": "81c8ce093b2c1646a87566a8e59d807fcf0ec95c"
 }
