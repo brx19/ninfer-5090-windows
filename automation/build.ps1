@@ -54,7 +54,7 @@ if (-not (Test-Path -LiteralPath (Join-Path $VcpkgRoot ".git"))) {
 Invoke-Checked git @("-C", $VcpkgRoot, "fetch", "origin", $Lock.vcpkg_sha)
 Invoke-Checked git @("-C", $VcpkgRoot, "checkout", "--detach", $Lock.vcpkg_sha)
 Invoke-Checked (Join-Path $VcpkgRoot "bootstrap-vcpkg.bat") @("-disableMetrics")
-Invoke-Checked (Join-Path $VcpkgRoot "vcpkg.exe") @("install", "curl[schannel]:x64-windows", "--disable-metrics")
+Invoke-Checked (Join-Path $VcpkgRoot "vcpkg.exe") @("install", "curl[ssl]:x64-windows", "--disable-metrics")
 $CurlPrefix = Join-Path $VcpkgRoot "installed/x64-windows"
 $env:PATH = "$CurlPrefix\bin;$env:PATH"
 
