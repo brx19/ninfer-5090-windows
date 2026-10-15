@@ -1,0 +1,14 @@
+{
+  "repository": "brx19/ninfer-5090-windows",
+  "source_repository": "headpiece747/ninfer-5090-windows",
+  "source_branch": "dev",
+  "upstream_repository": "Neroued/ninfer",
+  "upstream_branch": "master",
+  "integration_branch": "dev",
+  "cuda_version": "13.3.0",
+  "ffmpeg_repository": "BtbN/FFmpeg-Builds",
+  "ffmpeg_asset": "ffmpeg-n9.0-latest-win64-lgpl-shared-9.0.zip",
+  "vcpkg_repository": "microsoft/vcpkg",
+  "gpu_runner_variable": "ENABLE_GPU_QUALIFICATION",
+  "model_artifact_variable": "NINFER_TEST_ARTIFACT"
+}
