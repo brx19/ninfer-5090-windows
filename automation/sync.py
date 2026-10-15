@@ -186,10 +186,12 @@ def main():
             raise RuntimeError("Merge stopped; no changes pushed to dev")
         git("restore", "--source=" + base_sha, "--staged", "--worktree", "--", ".github/workflows")
         git("commit", "--no-edit")
-    # This fork owns its workflows. Preserve them when merging engine changes, so the
-    # standard Actions token never needs permission to import upstream workflow edits.
-    if git("ls-tree", "-r", "--name-only", base_sha, "--", ".github/workflows").stdout.strip():
-        git("restore", "--source=" + base_sha, "--staged", "--worktree", "--", ".github/workflows")
+    # This fork owns both its workflows and automation. Preserve that control plane
+    # when merging engine changes: candidate source is untrusted build input and must
+    # never replace code later executed with a write-capable token.
+    for owned_path in (".github/workflows", "automation"):
+        if git("ls-tree", "-r", "--name-only", base_sha, "--", owned_path).stdout.strip():
+            git("restore", "--source=" + base_sha, "--staged", "--worktree", "--", owned_path)
     path.write_text(json.dumps(lock, indent=2) + "\n", encoding="utf-8")
     git("add", "automation/dependencies.lock.json")
     if git("diff", "--cached", "--quiet", check=False).returncode:

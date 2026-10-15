@@ -100,12 +100,14 @@ jobs:
             D:\ninfer-cache\sccache-cpp
             D:\ninfer-cache\sccache-cuda
           key: ${{ steps.cache-keys.outputs.sccache_key }}
-          # A single restore prefix — the compatibility boundary (schema, os, arch, MSVC,
+          # The primary restore prefix is the compatibility boundary (schema, os, arch, MSVC,
           # CUDA, sm_120a, flag fingerprint). A source or FFmpeg change moves only the
           # snapshot identity after the prefix, so the latest compatible snapshot restores
-          # and sccache content addressing decides which objects hit.
+          # and sccache content addressing decides which objects hit. restore2 is one
+          # explicit, fully bounded migration prefix for this server-only automation change.
           restore-keys: |
             ${{ steps.cache-keys.outputs.sccache_restore1 }}
+            ${{ steps.cache-keys.outputs.sccache_restore2 }}
       - name: Record restored compiler-cache size
         shell: pwsh
         run: |

@@ -1,13 +1,6 @@
-# The checks that need no GPU, on every push and pull request.
-#
-# It runs the same script a commit runs (.githooks/pre-commit) rather than restating its commands, so
-# there is one definition of what the fast gates are and CI cannot drift from the hook. The hook's
-# commands are: documentation links resolve, the profile tables match the module and the generated
-# launchers, the converter tests pass, ruff is clean, and mypy is clean.
-#
-# windows-latest because the tooling is Windows-first: the recipes are .cmd, the profile matrix looks
-# for engines at build\apps, and check_profile_consistency finds the opencode provider entries under
-# %USERPROFILE%\.config\opencode (absent on CI, which it reports as skipped rather than failing).
+# Fast GPU-free gates for the fork-owned server build and release control plane.
+# Upstream engine correctness remains covered by the Windows build and optional GPU suite;
+# obsolete launcher/profile documentation is outside this personal server-only release contract.
 name: ci
 
 on:
@@ -16,39 +9,29 @@ on:
   pull_request:
     branches: [dev, main]
 
+permissions:
+  contents: read
+
 jobs:
   fast-gates:
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
     steps:
-      # The launcher comparison itself is gone with the fault it diagnosed: the render used to embed
-      # str(REPO), so the runner's checkout path made the two sides impossible to match. The launchers
-      # are host-independent now and the step that printed this difference has been removed with it.
-      # fetch-depth: 0, because check_fp8_band_ladders.py compares each current ladder against a
-      # pinned base revision (its DEFAULT_BASE) with `git show <rev>:<file>`. The default shallow
-      # clone holds one commit, so that revision is absent, and the gate fails here while passing
-      # in any full checkout -- which is how this tier sat red from 2026-10-04 unremarked.
-      # v7 on both actions, not v4/v5: those majors run on Node 20, which the runners now force onto
-      # Node 24 and report as a deprecation on every run. checkout v7 needs runner v2.327.1 or newer.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
-
-      - uses: actions/setup-python@v7
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
-          python-version: "3.11"
-
-      # The converter tests import torch and safetensors to read checkpoints; the CPU wheel is
-      # enough and keeps the job small. Torch is on its own index, so it installs separately.
-      # mypy is here rather than in the gate step because the hook now runs it: if it were installed
-      # later, the hook would fail on a missing module before reaching it.
-      - name: install tooling
+          python-version: '3.12'
+      - name: Install control-plane test dependencies
+        run: python -m pip install --quiet -r automation/requirements.txt
+      - name: Automation and cache contracts
         run: |
-          python -m pip install --quiet --upgrade pip
-          python -m pip install --quiet pytest pyyaml numpy safetensors ruff mypy
-          python -m pip install --quiet torch --index-url https://download.pytorch.org/whl/cpu
-
-      # bash is available on the Windows runner through Git, and the hook is a POSIX script.
-      - name: fast gates (the commit hook's own commands)
-        env:
-          NINFER_PYTHON: python
-        run: bash .githooks/pre-commit
+          python automation/test_automation.py -q
+          python automation/test_cache.py -q
+      - name: Relevant static gates
+        run: |
+          python tools/release/check_text_encoding.py
+          python tools/release/check_subprocess_encoding.py
+          python tools/release/check_dead_types.py
+          python tools/release/check_duplication.py

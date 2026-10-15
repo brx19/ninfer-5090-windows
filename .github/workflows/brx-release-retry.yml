@@ -1,0 +1,75 @@
+name: BRX release recovery
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_run_id:
+        description: Workflow run that contains the verified ninfer-runtime artifact
+        required: true
+        type: string
+      candidate_sha:
+        description: Exact validated candidate commit
+        required: true
+        type: string
+      base_sha:
+        description: dev SHA observed when the candidate was created
+        required: true
+        type: string
+      candidate_branch:
+        description: Automation-owned sync/headpiece-* branch
+        required: true
+        type: string
+      qualified:
+        description: Also recover qualification.json from the source run
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: brx-update-pipeline
+  cancel-in-progress: false
+
+jobs:
+  recover:
+    if: github.repository == 'brx19/ninfer-5090-windows'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.candidate_sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ninfer-runtime-${{ inputs.source_run_id }}
+          path: dist
+          run-id: ${{ inputs.source_run_id }}
+          repository: ${{ github.repository }}
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: inputs.qualified
+        with:
+          name: qualification-${{ inputs.source_run_id }}
+          path: dist
+          run-id: ${{ inputs.source_run_id }}
+          repository: ${{ github.repository }}
+          github-token: ${{ github.token }}
+      - name: Resume integration, release verification, and cleanup
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+          BASE_SHA: ${{ inputs.base_sha }}
+          CANDIDATE_BRANCH: ${{ inputs.candidate_branch }}
+          QUALIFIED: ${{ inputs.qualified }}
+        run: |
+          args=(--sha "$CANDIDATE_SHA" --base-sha "$BASE_SHA" --candidate "$CANDIDATE_BRANCH")
+          if [ "$QUALIFIED" = "true" ]; then args+=(--qualified); fi
+          python automation/publish.py "${args[@]}"

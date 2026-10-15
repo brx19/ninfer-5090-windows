@@ -35,9 +35,10 @@ live AFTER the prefix as the snapshot identity, so:
   * a repeated run of the same source+deps is an exact hit -> fast restore and no
     redundant snapshot is saved.
 
-The single restore-key is the prefix itself, which is also the leading string of the
-legacy keys (...flags<flaghash>-deps<dephash>-sc<scver>), so legacy snapshots saved
-before this rotation scheme remain restorable and warm the first run.
+The primary restore-key is the current prefix. One explicitly allow-listed prior flag
+fingerprint may be emitted as a second, fully bounded migration prefix. This permits a
+known compile-compatible automation-only change to reuse the verified legacy snapshot
+without introducing a broad cross-toolchain fallback.
 """
 from __future__ import annotations
 import argparse
@@ -111,11 +112,21 @@ def compute_sccache(lock, settings, *, msvc_version, os_name, arch, commit=None,
     commit12 = commit if commit is not None else _commit_short(repo_root)
     prefix = (f"ninfer-cache{schema}-sccache-{os_name.lower()}-{arch.lower()}"
               f"-msvc{msvc_version}-cuda{cuda_version}-sm120a-flags{flaghash}-")
+    compatible_hashes = settings["build_cache"].get("compatible_flag_hashes", [])
+    if len(compatible_hashes) > 1 or any(not re.fullmatch(r"[0-9a-f]{16}", value)
+                                         for value in compatible_hashes):
+        raise ValueError("compatible_flag_hashes must contain at most one 16-character hex hash")
+    legacy_prefix = ""
+    if compatible_hashes and compatible_hashes[0] != flaghash:
+        legacy_prefix = (f"ninfer-cache{schema}-sccache-{os_name.lower()}-{arch.lower()}"
+                         f"-msvc{msvc_version}-cuda{cuda_version}-sm120a-"
+                         f"flags{compatible_hashes[0]}-")
     identity = f"snap{commit12}-{dephash[:8]}"
     return {
         "sccache_key": f"{prefix}{identity}",
         "sccache_restore_prefix": prefix,
         "sccache_restore1": prefix,
+        "sccache_restore2": legacy_prefix,
         "sccache_identity": identity,
         "schema": schema,
         "msvc_version": msvc_version,
@@ -155,7 +166,7 @@ def compute_all(lock, settings, *, msvc_version, os_name, arch, commit=None,
 # step outputs and consumes them as steps.cache-keys.outputs.<name>. The contract test
 # (test_automation.BuildCacheContractTests) asserts every consumed name is in this set.
 OUTPUT_NAMES = (
-    "sccache_key", "sccache_restore1", "sccache_restore_prefix", "sccache_identity",
+    "sccache_key", "sccache_restore1", "sccache_restore2", "sccache_restore_prefix", "sccache_identity",
     "vcpkgsrc_key", "vcpkgbin_key", "vcpkgbin_restore", "ffmpeg_key",
     "schema", "msvc_version", "cuda_version", "sccache_version",
     "flag_hash", "dep_hash", "ffmpeg_sha256", "vcpkg_sha", "snapshot_commit",

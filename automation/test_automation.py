@@ -307,24 +307,42 @@ class PlanSyncTests(unittest.TestCase):
 
 
 class IntegrationTests(unittest.TestCase):
+    candidate = "sync/headpiece-aaaaaaaaaaaa-bbbbbbbbbbbb"
+
     def test_changed_candidate_is_refused(self):
         with patch.object(publish, "api", return_value={"object": {"sha": "b" * 40}}) as call:
             with self.assertRaisesRegex(ValueError, "Candidate branch changed"):
-                publish.integrate_candidate("brx19/ninfer-5090-windows", "sync/test", "a" * 40)
+                publish.integrate_candidate("brx19/ninfer-5090-windows", self.candidate, "a" * 40)
             self.assertEqual(call.call_count, 1)
 
     def test_integration_never_forces_branch_update(self):
         sha = "a" * 40
-        with patch.object(publish, "api", return_value={"object": {"sha": sha}}) as call:
-            publish.integrate_candidate("brx19/ninfer-5090-windows", "sync/test", sha)
-            self.assertEqual(call.call_args.args, ("repos/brx19/ninfer-5090-windows/git/refs/heads/dev", "PATCH", {"sha": sha, "force": False}))
+        replies = [
+            {"object": {"sha": sha}},
+            {"object": {"sha": "b" * 40}},
+            {"object": {"sha": sha}},
+        ]
+        with patch.object(publish, "api", side_effect=replies) as call:
+            publish.integrate_candidate("brx19/ninfer-5090-windows", self.candidate, sha)
+            self.assertEqual(call.call_args_list[-1].args, ("repos/brx19/ninfer-5090-windows/git/refs/heads/dev", "PATCH", {"sha": sha, "force": False}))
+
+    def test_integration_refuses_stale_base(self):
+        sha = "a" * 40
+        replies = [{"object": {"sha": sha}}, {"object": {"sha": "c" * 40}}]
+        with patch.object(publish, "api", side_effect=replies):
+            with self.assertRaisesRegex(ValueError, "dev advanced"):
+                publish.integrate_candidate("brx19/ninfer-5090-windows", self.candidate, sha, "b" * 40)
+
+    def test_cleanup_rejects_user_branch(self):
+        with self.assertRaisesRegex(ValueError, "non-automation"):
+            publish.cleanup_candidate("brx19/ninfer-5090-windows", "fix/user-work", "a" * 40, "tag")
 
 
 class PackageTests(unittest.TestCase):
     def stage(self, path, debug=False):
         path.mkdir()
-        for name in ("ninfer-serve.exe", "ninfer.exe", "ninfer-perplexity.exe"):
-            (path / name).write_bytes(b"MZfake-test-image" + (b"MSVCP140D.dll" if debug else b""))
+        (path / "ninfer-serve.exe").write_bytes(
+            b"MZfake-test-image" + (b"MSVCP140D.dll" if debug else b""))
         (path / "LICENSE").write_text("test license")
         (path / "NOTICE").write_text("test notice")
         (path / "runtime.dll").write_bytes(b"test runtime")
@@ -338,6 +356,9 @@ class PackageTests(unittest.TestCase):
             with zipfile.ZipFile(archive) as z:
                 self.assertIsNone(z.testzip())
                 self.assertFalse(json.loads(z.read("BUILD-MANIFEST.json"))["gpu_qualified"])
+                self.assertEqual(
+                    [name for name in z.namelist() if name.lower().endswith(".exe")],
+                    ["ninfer-serve.exe"])
                 for line in z.read("SHA256SUMS").decode().splitlines():
                     digest, name = line.split("  ", 1)
                     self.assertEqual(hashlib.sha256(z.read(name)).hexdigest(), digest)
@@ -355,25 +376,29 @@ class PackageTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "Missing package"):
                 package.package(Path(d), Path(d) / "output", "f" * 40, {}, "123")
 
+    def test_unused_application_is_rejected(self):
+        with tempfile.TemporaryDirectory() as d:
+            stage = Path(d) / "stage"
+            self.stage(stage)
+            (stage / "ninfer.exe").write_bytes(b"MZunused")
+            with self.assertRaisesRegex(ValueError, "exactly ninfer-serve.exe"):
+                package.package(stage, Path(d) / "output", "f" * 40, {}, "123")
+
     def test_branch_identity_rejects_invalid_sha(self):
         with self.assertRaises(ValueError):
             sync.candidate_name("dev;rm", {})
 
 
 class WorkflowGatingTests(unittest.TestCase):
-    """The release workflow must not publish, qualify or integrate anything it did not build.
-
-    The gates are structural: a candidate-release that runs after a skipped build has no
-    artifacts to download and turns an idle synchronization into a red run, and a publish that
-    pins the triggering push rather than the candidate commit silently detaches release
-    provenance from the bytes that were built.
-    """
+    """Structural contracts for the server-only build, release, and recovery lifecycle."""
 
     @classmethod
     def setUpClass(cls):
         root = Path(__file__).resolve().parents[1]
         cls.build_wf = (root / ".github" / "workflows" / "brx-sync-build.yml").read_text(encoding="utf-8")
         cls.gpu_wf = (root / ".github" / "workflows" / "gpu.yml").read_text(encoding="utf-8")
+        cls.retry_wf = (root / ".github" / "workflows" / "brx-release-retry.yml").read_text(encoding="utf-8")
+        cls.build_script = (root / "automation" / "build.ps1").read_text(encoding="utf-8")
 
     @staticmethod
     def job_section(text: str, job: str) -> str:
@@ -386,9 +411,10 @@ class WorkflowGatingTests(unittest.TestCase):
                 break
         return "\n".join(lines[start:end])
 
-    def test_candidate_release_requires_a_new_candidate(self):
-        section = self.job_section(self.build_wf, "candidate-release")
-        self.assertIn("if: needs.sync.outputs.changed == 'true'", section)
+    def test_only_server_target_is_built_and_staged(self):
+        self.assertIn('"--target", "ninfer-serve"', self.build_script)
+        self.assertNotIn('@("ninfer-serve.exe", "ninfer.exe", "ninfer-perplexity.exe")',
+                         self.build_script)
 
     def test_gpu_qualification_requires_a_new_candidate_and_the_flag(self):
         section = self.job_section(self.build_wf, "gpu")
@@ -403,10 +429,11 @@ class WorkflowGatingTests(unittest.TestCase):
         self.assertIn("runs-on: [self-hosted, windows, gpu-5090]", build_gpu)
         self.assertIn("runs-on: [self-hosted, windows, gpu-5090]", suite)
 
-    def test_integration_requires_successful_build_and_publish(self):
-        section = self.job_section(self.build_wf, "integrate")
+    def test_finalization_requires_successful_build(self):
+        section = self.job_section(self.build_wf, "finalize")
         self.assertIn("needs.build.result == 'success'", section)
-        self.assertIn("needs.candidate-release.result == 'success'", section)
+        self.assertIn("needs.sync.outputs.changed == 'true'", section)
+        self.assertNotIn("--prerelease", section)
 
     def test_publish_provenance_uses_the_candidate_sha(self):
         # Provenance is the candidate commit, not the triggering push: a push to dev can
@@ -415,6 +442,11 @@ class WorkflowGatingTests(unittest.TestCase):
             if "publish.py" in line:
                 self.assertNotIn("github.sha", line)
         self.assertIn("CANDIDATE_SHA: ${{ needs.sync.outputs.sha }}", self.build_wf)
+
+    def test_release_recovery_reuses_prior_verified_artifact(self):
+        self.assertIn("run-id: ${{ inputs.source_run_id }}", self.retry_wf)
+        self.assertIn("ninfer-runtime-${{ inputs.source_run_id }}", self.retry_wf)
+        self.assertIn("python automation/publish.py", self.retry_wf)
 
 
 class BuildCacheContractTests(unittest.TestCase):

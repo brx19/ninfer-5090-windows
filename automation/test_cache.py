@@ -26,6 +26,7 @@ LEGACY_DEV = ("ninfer-cache2-sccache-windows-x64-msvc14.51.36231-cuda13.3.0"
 LEGACY_FEATURE = ("ninfer-cache2-sccache-windows-x64-msvc14.51.36231-cuda13.3.0"
                   "-sm120a-flags20d1a528e14db04c-deps86b3ef4af4840707-sc0.18.0")
 LEGACY_FLAG_HASH = "20d1a528e14db04c"
+CURRENT_FLAG_HASH = "9af98f12d32c6319"
 
 
 def _settings(schema=2, scver="0.18.0"):
@@ -93,6 +94,15 @@ class SccacheKeyStructureTests(unittest.TestCase):
         self.assertEqual(k["sccache_restore1"], k["sccache_restore_prefix"])
         # The prefix ends with '-'; the key is prefix + identity (snap...).
         self.assertTrue(k["sccache_key"].startswith(k["sccache_restore_prefix"] + "snap"))
+
+    def test_allowlisted_migration_prefix_is_fully_bounded(self):
+        settings = _settings()
+        settings["build_cache"]["compatible_flag_hashes"] = [LEGACY_FLAG_HASH]
+        key = cache_keys.compute_sccache(
+            _lock(), settings, msvc_version="14.51.36231", os_name="Windows",
+            arch="X64", commit="2af5e524ba58", flag_hash=CURRENT_FLAG_HASH)
+        self.assertTrue(LEGACY_DEV.startswith(key["sccache_restore2"]))
+        self.assertIn("msvc14.51.36231-cuda13.3.0-sm120a", key["sccache_restore2"])
 
     def test_sm120a_is_in_the_prefix(self):
         self.assertIn("sm120a", self._key()["sccache_restore_prefix"])
@@ -164,10 +174,8 @@ class LegacyRestorationTests(unittest.TestCase):
         self.assertTrue(LEGACY_FEATURE.startswith(prefix),
                         "the restore prefix no longer restores the legacy feature cache")
 
-    def test_flag_fingerprint_reproduces_legacy_value_on_this_repo(self):
-        # Byte-for-byte reproduction of the legacy inline PowerShell flag fingerprint,
-        # so the restore prefix matches caches saved before the rotation scheme.
-        self.assertEqual(cache_keys.flag_fingerprint(str(REPO_ROOT)), LEGACY_FLAG_HASH)
+    def test_flag_fingerprint_matches_server_only_build_contract(self):
+        self.assertEqual(cache_keys.flag_fingerprint(str(REPO_ROOT)), CURRENT_FLAG_HASH)
 
 
 class OtherLayerKeyTests(unittest.TestCase):
