@@ -72,7 +72,7 @@ def packet():
 
 def run(executable, path, mode):
     result = subprocess.run(
-        [executable, str(path), mode], input=packet(), stdout=subprocess.PIPE
+        [executable, str(path), mode], input=packet(), stdout=subprocess.PIPE, check=False
     )
     if result.returncode == 77:
         raise SystemExit(77)

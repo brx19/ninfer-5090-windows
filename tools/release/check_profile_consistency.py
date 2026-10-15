@@ -45,6 +45,71 @@ def read(path: Path) -> str:
     return path.read_text(encoding="utf-8", errors="replace") if path.exists() else ""
 
 
+def doc_contract_applies(doc_name: str, body: str) -> bool:
+    # Documentation ownership: RELEASE_NOTES.md is the fork-owned transcription site and must
+    # carry the full profile table. README.md is shared with the upstream documentation, which
+    # the automated upstream synchronization may rewrite independently of this fork; it is bound
+    # by the table contract only while it actually references the shipped launchers. Without this
+    # split, a legitimate upstream README that carries no fork-specific table re-introduces this
+    # gate's failure on every sync (brx19/ninfer-5090-windows run 38700892274), while a shared
+    # doc that does name a lane is still held to the table.
+    if doc_name == "RELEASE_NOTES.md":
+        return True
+    return any(profile["file"] in body for profile in PROFILES)
+
+
+def check_doc_tables(wt: Path) -> None:
+    print("\n=== doc tables quote the table ===")
+    for doc_path in (wt / "README.md", wt / "RELEASE_NOTES.md"):
+        text = read(doc_path)
+        if not doc_contract_applies(doc_path.name, text):
+            notes.append(f"{doc_path.name} carries no shipped-lane content; the table contract does not bind it")
+            continue
+        for profile in PROFILES:
+            check(f"{doc_path.name} quotes {profile['file']} at {round(profile['tok'])} tok/s",
+                  f"{round(profile['tok'])} tok/s" in text,
+                  "a doc table is a transcription site: it must match profiles.PROFILES")
+            check(f"{doc_path.name} quotes {profile['file']}'s acceptance {profile['acc']}",
+                  f"| {profile['acc']} |" in text)
+
+
+def check_docs(wt: Path) -> None:
+    print("\n=== docs ===")
+    for doc in ("README.md", "RELEASE_NOTES.md"):
+        body = read(wt / doc)
+        if not doc_contract_applies(doc, body):
+            continue
+        for profile in PROFILES:
+            check(f"{doc} names {profile['file']}", profile["file"] in body)
+        # The Spec column pairs a launcher with its draft count, and it has been left behind twice
+        # when a row's depth changed: nvfp4fullnoex shipped depth 9 beside depth-7 figures, and the
+        # ninfer row read "DFlash2 (7)" while its figures were the depth-9 ones. Checked against the
+        # module now, because a figure and a setting that disagree is a defect whichever one is right.
+        spec_labels = {"dflash2": "DFlash2", "mtp": "MTP"}
+        for profile in PROFILES:
+            if profile["spec"] not in spec_labels:
+                continue
+            want = f"{spec_labels[profile['spec']]} ({profile['draft']})"
+            row = next((line for line in body.splitlines()
+                        if line.startswith("| `") and f"`{profile['file']}`" in line), "")
+            check(f"{doc} pairs {profile['file']} with {want}", want in row,
+                  f"row reads: {row.strip()[:100]}")
+        # A prose count of a configuration drifts silently: "one lane ships k8v4" became four and then
+        # five in a single day, each time caught by reading rather than by a gate. Assert the sentence's
+        # number against the rows.
+        words = {1: "one", 2: "two", 3: "three", 4: "four", 5: "five", 6: "six", 7: "seven",
+                 8: "eight"}
+        stated = re.search(r"\*\*(\w+) lanes ship `--kv-dtype k8v4`\*\*", body)
+        k8v4_rows = len([p for p in PROFILES if p.get("kv_dtype") == "k8v4"])
+        check(f"{doc} states the k8v4 lane count correctly",
+              stated is not None
+              and stated.group(1).lower() == words.get(k8v4_rows, str(k8v4_rows)),
+              f"doc says {stated.group(1) if stated else 'nothing'}, rows have {k8v4_rows}")
+        for retired in RETIRED:
+            check(f"{doc} free of retired {retired}", retired not in body)
+        check(f"{doc} free of sub-262k ceilings", "163,840" not in body and "180,224" not in body)
+
+
 def main() -> int:
     print(f"\n=== launcher generator agreement ({len(PROFILES)} profiles) ===")
     for profile in PROFILES:
@@ -103,15 +168,7 @@ def main() -> int:
               short in recorded, "a digest no identity block records is stale or invented")
     check("the docs quote at least one digest", bool(quoted), "or the check above is vacuous")
 
-    print("\n=== doc tables quote the table ===")
-    for doc_path in (WT / "README.md", WT / "RELEASE_NOTES.md"):
-        text = read(doc_path)
-        for profile in PROFILES:
-            check(f"{doc_path.name} quotes {profile['file']} at {round(profile['tok'])} tok/s",
-                  f"{round(profile['tok'])} tok/s" in text,
-                  "a doc table is a transcription site: it must match profiles.PROFILES")
-            check(f"{doc_path.name} quotes {profile['file']}'s acceptance {profile['acc']}",
-                  f"| {profile['acc']} |" in text)
+    check_doc_tables(WT)
 
     print("\n=== opencode providers ===")
     if not OPENCODE.exists():
@@ -184,38 +241,7 @@ def main() -> int:
           "start_quasar_v3_" not in verifier and "start_ninfer_v3_" not in verifier)
     check("verifier does not restate a ceiling", "262144" not in verifier)
 
-    print("\n=== docs ===")
-    for doc in ("README.md", "RELEASE_NOTES.md"):
-        body = read(WT / doc)
-        for profile in PROFILES:
-            check(f"{doc} names {profile['file']}", profile["file"] in body)
-        # The Spec column pairs a launcher with its draft count, and it has been left behind twice
-        # when a row's depth changed: nvfp4fullnoex shipped depth 9 beside depth-7 figures, and the
-        # ninfer row read "DFlash2 (7)" while its figures were the depth-9 ones. Checked against the
-        # module now, because a figure and a setting that disagree is a defect whichever one is right.
-        spec_labels = {"dflash2": "DFlash2", "mtp": "MTP"}
-        for profile in PROFILES:
-            if profile["spec"] not in spec_labels:
-                continue
-            want = f"{spec_labels[profile['spec']]} ({profile['draft']})"
-            row = next((line for line in body.splitlines()
-                        if line.startswith("| `") and f"`{profile['file']}`" in line), "")
-            check(f"{doc} pairs {profile['file']} with {want}", want in row,
-                  f"row reads: {row.strip()[:100]}")
-        # A prose count of a configuration drifts silently: "one lane ships k8v4" became four and then
-        # five in a single day, each time caught by reading rather than by a gate. Assert the sentence's
-        # number against the rows.
-        words = {1: "one", 2: "two", 3: "three", 4: "four", 5: "five", 6: "six", 7: "seven",
-                 8: "eight"}
-        stated = re.search(r"\*\*(\w+) lanes ship `--kv-dtype k8v4`\*\*", body)
-        k8v4_rows = len([p for p in PROFILES if p.get("kv_dtype") == "k8v4"])
-        check(f"{doc} states the k8v4 lane count correctly",
-              stated is not None
-              and stated.group(1).lower() == words.get(k8v4_rows, str(k8v4_rows)),
-              f"doc says {stated.group(1) if stated else 'nothing'}, rows have {k8v4_rows}")
-        for retired in RETIRED:
-            check(f"{doc} free of retired {retired}", retired not in body)
-        check(f"{doc} free of sub-262k ceilings", "163,840" not in body and "180,224" not in body)
+    check_docs(WT)
 
     print("\n=== packager file list ===")
     packager = read(WT / "tools" / "release" / "package_release.py")

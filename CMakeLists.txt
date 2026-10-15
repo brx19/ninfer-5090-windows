@@ -12,6 +12,18 @@ if(NOT CMAKE_CUDA_ARCHITECTURES STREQUAL "120a")
     "'${CMAKE_CUDA_ARCHITECTURES}'")
 endif()
 
+# Windows: static MSVC CRT by default. The shipped Windows dependencies are built
+# against the static CRT -- vcpkg's default x64-windows triplet (curl, zlib, ...)
+# and CUDA's static runtime -- and the packaged runtime is self-contained, so the
+# target machine needs no Visual C++ Redistributable. Compiling the product
+# objects against the dynamic CRT (the CMake default) mixed /MD with those
+# /MT-built libraries and produced LNK4098 on every executable link
+# (brx19/ninfer-5090-windows run 38700892272). Recipes may override with
+# -DCMAKE_MSVC_RUNTIME_LIBRARY=<other>; non-MSVC toolchains ignore this variable.
+if(NOT DEFINED CMAKE_MSVC_RUNTIME_LIBRARY)
+  set(CMAKE_MSVC_RUNTIME_LIBRARY MultiThreaded)
+endif()
+
 project(ninfer LANGUAGES C CXX CUDA)
 
 # --- Global settings ---------------------------------------------------------

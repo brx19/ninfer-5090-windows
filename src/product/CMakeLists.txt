@@ -6,6 +6,13 @@ if(TARGET CURL::libcurl)
   target_link_libraries(ninfer_media_acquire PRIVATE CURL::libcurl)
   target_compile_definitions(ninfer_media_acquire PRIVATE NINFER_HAVE_LIBCURL=1)
 endif()
+if(WIN32)
+  # acquire.cpp resolves public media URLs with Winsock (WSAStartup, getaddrinfo,
+  # freeaddrinfo, ntohl, inet_ntop). As a static library's private link dependency it
+  # reaches every consumer's final link line, so all executables that link it resolve
+  # the symbols without any global linker configuration.
+  target_link_libraries(ninfer_media_acquire PRIVATE ws2_32)
+endif()
 
 
 add_library(ninfer_product_prompt_input STATIC

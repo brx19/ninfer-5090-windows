@@ -181,5 +181,6 @@ if __name__ == "__main__":
                 input=b"",
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
+                check=False,
             )
             assert result.returncode == 1, (name, result.returncode, result.stderr)

@@ -129,7 +129,7 @@ echo "pre-commit: converter tests"
 # these tests builds a torch extension at run time and torch finds the compiler with `where cl`,
 # which is not on PATH in a plain shell. The argument list stays here so there is one definition of
 # what this step runs.
-PYTEST_ARGS="tests/convert tests/artifact tests/release/test_doc_links.py tests/release/test_text_encoding.py tests/release/test_calibration_corpus.py tests/release/test_test_mutation.py tests/release/test_subprocess_encoding.py tests/release/test_test_baseline_cache.py tests/release/test_lane_figures.py tests/release/test_retired_names.py tests/release/test_activity_predicate.py tests/release/test_reference_audit.py tests/bench/test_request_log_reader.py tests/bench/test_session_tools.py"
+PYTEST_ARGS="tests/convert tests/artifact tests/release/test_doc_links.py tests/release/test_text_encoding.py tests/release/test_calibration_corpus.py tests/release/test_test_mutation.py tests/release/test_subprocess_encoding.py tests/release/test_test_baseline_cache.py tests/release/test_lane_figures.py tests/release/test_retired_names.py tests/release/test_activity_predicate.py tests/release/test_reference_audit.py tests/release/test_profile_consistency.py tests/release/test_media_acquire_windows_link.py tests/bench/test_request_log_reader.py tests/bench/test_session_tools.py"
 if [ -n "${WINDIR:-}" ] && [ -f tools/scripts/precommit_pytest.cmd ]; then
     NINFER_PYTHON="$PY" cmd //c "tools\\scripts\\precommit_pytest.cmd $PYTEST_ARGS -q"
 else

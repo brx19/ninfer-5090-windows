@@ -102,7 +102,11 @@ jobs:
           if-no-files-found: ignore
 
   candidate-release:
+    # Skipped when synchronization produced no new candidate: there is nothing to publish and
+    # the build artifacts would not exist. Publishing only a candidate that was actually built
+    # keeps the prerelease trail a true record of distinct runtime candidates.
     needs: [sync, build]
+    if: needs.sync.outputs.changed == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -123,11 +127,16 @@ jobs:
 
   gpu:
     needs: [sync, build, candidate-release]
-    if: vars.ENABLE_GPU_QUALIFICATION == 'true'
-    runs-on: [self-hosted, Windows, X64, rtx5090]
+    # Optional qualification: it runs only when explicitly enabled AND when a new candidate
+    # exists. The runner label matches gpu.yml's registration convention (self-hosted runner
+    # registered on this repository as '5090-box' with the gpu-5090 label); until a runner is
+    # registered on this repository, leaving the flag enabled would queue this job forever,
+    # which is why the flag is off by default and never blocks the build.
+    if: needs.sync.outputs.changed == 'true' && vars.ENABLE_GPU_QUALIFICATION == 'true'
+    runs-on: [self-hosted, windows, gpu-5090]
     timeout-minutes: 330
     concurrency:
-      group: brx-rtx5090
+      group: gpu-5090
       cancel-in-progress: false
     env:
       NINFER_TEST_ARTIFACT: ${{ vars.NINFER_TEST_ARTIFACT }}

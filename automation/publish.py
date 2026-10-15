@@ -55,7 +55,7 @@ def main():
         notes.write_text(f"Source commit: `{args.sha}`.\n\n"
                          "Automatically compiled Windows sm_120a Release candidate. GPU tests not yet completed.\n"
                          "Includes explicit source/dependency pins, runtime DLLs, licenses and SHA256SUMS.\n"
-                         "Microsoft Visual C++ x64 Redistributable is required.\n", encoding="utf-8")
+                         "Microsoft Visual C++ x64 Redistributable is not required; the MSVC runtime is statically linked.\n", encoding="utf-8")
         existing = run(["gh", "release", "view", tag, "--repo", repo], check=False)
         if existing.returncode:
             run(["gh", "release", "create", tag, "--repo", repo, "--target", args.sha,
