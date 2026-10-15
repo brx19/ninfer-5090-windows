@@ -3,6 +3,8 @@
 #include "core/io/read_queue.h"
 
 #include <cstring>
+#include <fcntl.h>
+#include <io.h>
 #include <iostream>
 #include <memory>
 
@@ -93,6 +95,10 @@ void run(const char* path) {
 
 int main(int argc, char** argv) {
     if (argc != 2) return 1;
+#ifdef _WIN32
+    _setmode(_fileno(stdout), _O_BINARY);
+    _setmode(_fileno(stdin), _O_BINARY);
+#endif
     try {
         run(argv[1]);
     } catch (const std::exception& e) {

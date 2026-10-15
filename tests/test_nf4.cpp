@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <bit>
+#include <fcntl.h>
+#include <io.h>
 #include <iostream>
 #include <stdexcept>
 #include <vector>
@@ -47,6 +49,10 @@ void validation() {
 
 int main(int argc, char**) {
     try {
+#ifdef _WIN32
+        _setmode(_fileno(stdout), _O_BINARY);
+        _setmode(_fileno(stdin), _O_BINARY);
+#endif
         if (argc == 1) {
             validation();
             return 0;

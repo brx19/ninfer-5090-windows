@@ -1,6 +1,6 @@
 {
-  "recorded": "2026-10-13",
-  "suite_size": 183,
+  "recorded": "2026-10-15",
+  "suite_size": 191,
   "known_failures": {
     "ninfer_qwen3_5_dflash_real_test": {
       "case": "dflash real route",
@@ -77,6 +77,11 @@
       "date": "2026-10-13",
       "count": 9,
       "note": "The upstream merge (c996baa8) brought MoE and expert-weight infrastructure with its tests: ninfer_expert_cache_test, ninfer_linear_nvfp4_bank_test, ninfer_moe_cpu_test, ninfer_moe_cpu_avx2_test, ninfer_moe_cpu_fma_test, ninfer_qwen3_5_moe_execution_test, ninfer_qwen3_5_moe_offload_real_test, ninfer_sum_contributions_test and ninfer_weight_bank_test were added, and ninfer_artifact_transfer_plan_test was removed with the plan_transfer surface it covered. Verified by checking each name against HEAD's test cmake files and the current registration list: 9 added, 1 removed, net +9."
+    },
+    {
+      "date": "2026-10-15",
+      "count": 8,
+      "note": "test binaries now use binary stdout mode; suite size 183->191"
     }
   ]
 }
