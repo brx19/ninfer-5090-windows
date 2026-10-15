@@ -10,5 +10,14 @@
   "ffmpeg_asset": "ffmpeg-n9.0-latest-win64-lgpl-shared-9.0.zip",
   "vcpkg_repository": "microsoft/vcpkg",
   "gpu_runner_variable": "ENABLE_GPU_QUALIFICATION",
-  "model_artifact_variable": "NINFER_TEST_ARTIFACT"
+  "model_artifact_variable": "NINFER_TEST_ARTIFACT",
+  "build_cache": {
+    "schema": 1,
+    "sccache": {
+      "version": "0.18.0",
+      "url": "https://github.com/mozilla/sccache/releases/download/v0.18.0/sccache-v0.18.0-x86_64-pc-windows-msvc.zip",
+      "asset": "sccache-v0.18.0-x86_64-pc-windows-msvc.zip",
+      "sha256": "8965c74d5e8a225244f741e18ad2f3f504f48228dc1bac948fc22761a348363d"
+    }
+  }
 }

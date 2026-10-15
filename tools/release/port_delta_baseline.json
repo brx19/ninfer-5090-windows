@@ -37,7 +37,7 @@
       "status": "M",
       "disposition": "windows",
       "review": "windows",
-      "reason": "Cited in the diff -- msvc: MSVC. Open it before changing this path."
+      "reason": "Cited in the diff -- msvc: MSVC. Open it before changing this path. 2026-10-15: the Windows CI cache work added the NINFER_CUDA_COMPILER_LAUNCHER gate after the Ninja job-pool block (default OFF; fatal when ON without a launcher) so sccache's CUDA caching stays an explicit, verifiable opt-in; the sm_120a and static-CRT blocks it sits beside are unchanged."
     },
     "CONTRIBUTING.md": {
       "status": "M",

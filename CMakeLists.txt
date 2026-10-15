@@ -58,6 +58,24 @@ if(CMAKE_GENERATOR MATCHES "Ninja")
   set(CMAKE_JOB_POOL_LINK ninfer_link)
 endif()
 
+# --- Compiler launcher gate (Windows CI, sccache) -----------------------------
+# The CI recipe may route compilers through CMAKE_<LANG>_COMPILER_LAUNCHER. The
+# C/C++ launcher is proven in this pipeline and passed unconditionally by it;
+# the CUDA launcher is experimental on Windows (NVCC dry-run edge cases have
+# crashed or produced wrong compiler invocations on some toolchains), so it is
+# only active when a recipe opts in explicitly AND supplies a launcher. When in
+# doubt, leave it off: CMake falls back to invoking nvcc directly.
+option(NINFER_CUDA_COMPILER_LAUNCHER
+  "Route NVCC through CMAKE_CUDA_COMPILER_LAUNCHER (experimental on Windows)" OFF)
+if(NINFER_CUDA_COMPILER_LAUNCHER)
+  if(NOT CMAKE_CUDA_COMPILER_LAUNCHER)
+    message(FATAL_ERROR
+      "NINFER_CUDA_COMPILER_LAUNCHER=ON requires -DCMAKE_CUDA_COMPILER_LAUNCHER=<launcher>")
+  endif()
+  message(STATUS "NInfer: CUDA compiler launcher active: ${CMAKE_CUDA_COMPILER_LAUNCHER} "
+    "(experimental on Windows; verify object and binary parity before relying on it)")
+endif()
+
 # Tests also exercise product input, logging and protocol adapters.
 set(NINFER_BUILD_PRODUCT_SUPPORT OFF)
 if(NINFER_BUILD_APPS OR BUILD_TESTING)
