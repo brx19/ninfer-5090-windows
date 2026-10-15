@@ -395,7 +395,9 @@ class WorkflowGatingTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         root = Path(__file__).resolve().parents[1]
+        cls.root = root
         cls.build_wf = (root / ".github" / "workflows" / "brx-sync-build.yml").read_text(encoding="utf-8")
+        cls.cache_wf = (root / ".github" / "workflows" / "brx-cache-verify.yml").read_text(encoding="utf-8")
         cls.gpu_wf = (root / ".github" / "workflows" / "gpu.yml").read_text(encoding="utf-8")
         cls.retry_wf = (root / ".github" / "workflows" / "brx-release-retry.yml").read_text(encoding="utf-8")
         cls.build_script = (root / "automation" / "build.ps1").read_text(encoding="utf-8")
@@ -415,6 +417,35 @@ class WorkflowGatingTests(unittest.TestCase):
         self.assertIn('"--target", "ninfer-serve"', self.build_script)
         self.assertNotIn('@("ninfer-serve.exe", "ninfer.exe", "ninfer-perplexity.exe")',
                          self.build_script)
+
+    def test_build_script_has_valid_powershell_syntax(self):
+        import shutil
+        pwsh = os.environ.get("NINFER_TEST_PWSH") or shutil.which("pwsh")
+        if not pwsh or not os.path.exists(pwsh):
+            self.skipTest("pwsh is not available; fast CI parses the build script")
+        command = (
+            "$tokens=$null; $errors=$null; "
+            "[System.Management.Automation.Language.Parser]::ParseFile("
+            "'automation/build.ps1',[ref]$tokens,[ref]$errors) | Out-Null; "
+            "if ($errors.Count) { $errors | ForEach-Object { Write-Error $_ }; exit 1 }"
+        )
+        proc = subprocess.run(
+            [pwsh, "-NoProfile", "-NonInteractive", "-Command", command],
+            cwd=self.root, capture_output=True, text=True, encoding="utf-8",
+            timeout=60, check=False)
+        self.assertEqual(proc.returncode, 0,
+                         f"automation/build.ps1 has parser errors:\n{proc.stderr}")
+
+    def test_cuda_install_is_bounded_retried_and_verified(self):
+        for name, workflow in (("release", self.build_wf), ("cache verification", self.cache_wf)):
+            self.assertIn("name: Restore CUDA toolkit", workflow, name)
+            self.assertIn("id: cuda-primary", workflow, name)
+            self.assertIn("timeout-minutes: 10", workflow, name)
+            self.assertIn("steps['cuda-primary'].outcome == 'failure'", workflow, name)
+            self.assertIn("timeout-minutes: 15", workflow, name)
+            self.assertIn("name: Verify CUDA toolkit", workflow, name)
+            self.assertIn("name: Save CUDA toolkit", workflow, name)
+            self.assertEqual(workflow.count("uses: Jimver/cuda-toolkit@"), 2, name)
 
     def test_gpu_qualification_requires_a_new_candidate_and_the_flag(self):
         section = self.job_section(self.build_wf, "gpu")
