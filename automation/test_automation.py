@@ -175,6 +175,7 @@ class SyncTests(unittest.TestCase):
         # Someone else advanced the candidate branch on the remote with a different tree.
         probe = self.root / "probe"
         subprocess.run(["git", "clone", str(self.origin), str(probe)], check=True, capture_output=True)
+        configure(probe)
         git_at(probe, "checkout", first["candidate"])
         (probe / "divergence.txt").write_text("someone else's candidate work\n")
         git_at(probe, "add", ".")
