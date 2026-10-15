@@ -44,6 +44,15 @@ if ($LASTEXITCODE -ne 0 -or ($NvccVersion -join "`n") -notmatch 'release 13\.3')
 $env:PATH = "$($env:CUDA_PATH)\bin;$env:PATH"
 $env:CUDA_HOME = $env:CUDA_PATH
 
+# Exercise the real device compiler, not just nvcc's version-printing frontend.
+$CompilerProbe = Join-Path ([IO.Path]::GetTempPath()) ("brx-cuda-" + [guid]::NewGuid().ToString("N"))
+try {
+    [IO.File]::WriteAllText(($CompilerProbe + ".cu"), 'extern "C" __global__ void brx_probe() {}', [Text.UTF8Encoding]::new($false))
+    Invoke-Checked $Nvcc @("-cubin", "-arch=sm_120a", ($CompilerProbe + ".cu"), "-o", ($CompilerProbe + ".cubin"))
+} finally {
+    Remove-Item -LiteralPath ($CompilerProbe + ".cu"), ($CompilerProbe + ".cubin") -Force -ErrorAction SilentlyContinue
+}
+
 # Both hosted and GPU jobs use exactly the candidate's dependency pins.
 $TempRoot = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { Join-Path $RepoRoot ".automation-temp" }
 New-Item -ItemType Directory -Force -Path $TempRoot | Out-Null
@@ -115,9 +124,17 @@ foreach ($LicenseFile in Get-ChildItem "third_party" -Recurse -File | Where-Obje
 }
 $env:BRX_NINFER_NVCC_VERSION = $NvccVersion -join "`n"
 $env:BRX_NINFER_MSVC_VERSION = $env:VCToolsVersion
+# The Windows hosted runner may have no NVIDIA driver, even for --help: this
+# executable imports nvcuda.dll. Record that gap instead of treating a build as a GPU test.
+$env:BRX_NINFER_LOADER_SMOKE = "skipped_no_nvidia_driver"
+if (Test-Path -LiteralPath (Join-Path $env:SystemRoot "System32/nvcuda.dll")) {
+    $OriginalPath = $env:PATH
+    try {
+        $env:PATH = "$Stage;$env:SystemRoot\System32;$env:SystemRoot"
+        Invoke-Checked (Join-Path $Stage "ninfer-serve.exe") @("--help")
+        $env:BRX_NINFER_LOADER_SMOKE = "passed_help"
+    } finally { $env:PATH = $OriginalPath }
+} else {
+    Write-Host "No NVIDIA driver DLL on hosted runner; loader smoke deferred to GPU qualification."
+}
 Invoke-Checked python @("automation/package.py", "--stage", $Stage, "--output", "dist")
-$OriginalPath = $env:PATH
-try {
-    $env:PATH = "$Stage;$env:SystemRoot\System32;$env:SystemRoot"
-    Invoke-Checked (Join-Path $Stage "ninfer-serve.exe") @("--help")
-} finally { $env:PATH = $OriginalPath }
