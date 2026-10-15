@@ -18,6 +18,7 @@ sys.path.insert(0, str(AUTOMATION))
 import sync
 import package
 import publish
+import cache_keys
 
 
 def git_at(path, *args):
@@ -149,9 +150,27 @@ class SyncTests(unittest.TestCase):
         first = self.invoke()
         self.integrate(first)
         self.dependency_revision = "d" * 40
-        result = self.invoke()
+        # A dependency change is detected by the independent dependency-refresh cadence,
+        # not by the (source-only) six-hour source sync.
+        result = self.invoke("--mode", "dependencies")
         self.assertEqual(result["changed"], "true")
         self.assertNotEqual(result["candidate"], first["candidate"])
+
+    def test_source_run_ignores_dependency_change(self):
+        first = self.invoke()
+        self.integrate(first)
+        self.dependency_revision = "d" * 40
+        # The source cadence keeps dependency pins; a dep update alone must not trigger it.
+        result = self.invoke()
+        self.assertEqual(result["changed"], "false")
+
+    def test_dependencies_run_ignores_source_change(self):
+        first = self.invoke()
+        self.integrate(first)
+        self.advance_source("moved upstream but dep-refresh must not pick it up\n")
+        # The dependency cadence keeps the locked source; a source move alone must not trigger it.
+        result = self.invoke("--mode", "dependencies")
+        self.assertEqual(result["changed"], "false")
 
     def test_conflict_does_not_modify_dev(self):
         (self.work / "README.md").write_text("local modification\n")
@@ -192,6 +211,99 @@ class SyncTests(unittest.TestCase):
         second = self.invoke("--force-build")
         self.assertNotEqual(first["candidate_sha"], second["candidate_sha"])
         self.assertIn("-run123", second["candidate"])
+
+
+class PlanSyncTests(unittest.TestCase):
+    """Pure scheduling decision (no git/network): which cadence triggers a candidate."""
+
+    @staticmethod
+    def _lock(src, vcpkg="a" * 40, ffmpeg="b" * 64, auto="c" * 64, upstream="d" * 40, cuda="13.3.0"):
+        return sync.build_lock(src, {
+            "cuda_version": cuda, "vcpkg_sha": vcpkg,
+            "ffmpeg": {"name": "ff", "url": "https://x", "sha256": ffmpeg},
+        }, auto, upstream)
+
+    def _plan(self, current, source_sha, ancestor, resolved, auto, upstream, mode, force=False):
+        return sync.plan_sync(current, source_sha=source_sha, source_is_ancestor=ancestor,
+                              resolved_deps=resolved, automation_sha256=auto, upstream_sha=upstream,
+                              mode=mode, force=force)
+
+    def test_no_change_source_sync(self):
+        cur = self._lock("1" * 40)
+        lock, changed, src = self._plan(cur, "1" * 40, True, sync.deps_of(cur),
+                                        cur["automation_sha256"], cur["upstream_master_sha"], "source")
+        self.assertFalse(changed)
+        self.assertEqual(src, "1" * 40)
+        self.assertEqual(lock, cur)
+
+    def test_source_move_builds(self):
+        cur = self._lock("1" * 40)
+        lock, changed, src = self._plan(cur, "2" * 40, False, sync.deps_of(cur),
+                                        cur["automation_sha256"], cur["upstream_master_sha"], "source")
+        self.assertTrue(changed)
+        self.assertEqual(src, "2" * 40)
+        self.assertEqual(lock["headpiece_sha"], "2" * 40)
+
+    def test_source_run_pins_dependencies(self):
+        cur = self._lock("1" * 40)
+        moved_deps = sync.deps_of(cur)
+        moved_deps["ffmpeg"] = {"name": "ff", "url": "https://y", "sha256": "e" * 64}
+        lock, changed, _ = self._plan(cur, "2" * 40, False, moved_deps,
+                                      cur["automation_sha256"], cur["upstream_master_sha"], "source")
+        # A source run captures the source but keeps the locked dependency pins.
+        self.assertTrue(changed)
+        self.assertEqual(lock["ffmpeg"]["sha256"], "b" * 64)
+
+    def test_dependency_move_builds(self):
+        cur = self._lock("1" * 40)
+        new_deps = sync.deps_of(cur)
+        new_deps["ffmpeg"] = {"name": "ff", "url": "https://y", "sha256": "e" * 64}
+        lock, changed, src = self._plan(cur, "1" * 40, True, new_deps,
+                                        cur["automation_sha256"], cur["upstream_master_sha"], "dependencies")
+        self.assertTrue(changed)
+        self.assertEqual(src, "1" * 40)          # source stays pinned
+        self.assertEqual(lock["headpiece_sha"], "1" * 40)
+        self.assertEqual(lock["ffmpeg"]["sha256"], "e" * 64)
+
+    def test_no_change_dependency_run_is_idempotent(self):
+        cur = self._lock("1" * 40)
+        lock, changed, _ = self._plan(cur, "1" * 40, True, sync.deps_of(cur),
+                                      cur["automation_sha256"], cur["upstream_master_sha"], "dependencies")
+        self.assertFalse(changed)
+
+    def test_automation_change_builds_in_both_modes(self):
+        cur = self._lock("1" * 40)
+        for mode in ("source", "dependencies"):
+            _, changed, _ = self._plan(cur, "1" * 40, True, sync.deps_of(cur),
+                                       "f" * 64, cur["upstream_master_sha"], mode)
+            self.assertTrue(changed, mode)
+
+    def test_upstream_provenance_move_never_builds(self):
+        cur = self._lock("1" * 40)
+        # upstream master moved on its own: excluded from the build fingerprint.
+        self.assertEqual(sync.build_fingerprint(cur),
+                         sync.build_fingerprint(self._lock("1" * 40, upstream="9" * 40)))
+
+    def test_first_run_builds(self):
+        lock, changed, src = self._plan(None, "1" * 40, False, self._lock("x" * 40),
+                                        "c" * 64, "d" * 40, "source")
+        self.assertTrue(changed)
+        self.assertEqual(src, "1" * 40)
+
+    def test_force_builds(self):
+        cur = self._lock("1" * 40)
+        _, changed, _ = self._plan(cur, "1" * 40, True, sync.deps_of(cur),
+                                   cur["automation_sha256"], cur["upstream_master_sha"], "source", force=True)
+        self.assertTrue(changed)
+
+    def test_candidate_name_is_idempotent_for_same_build_inputs(self):
+        cur = self._lock("1" * 40)
+        self.assertEqual(sync.candidate_name("1" * 40, cur),
+                         sync.candidate_name("1" * 40, self._lock("1" * 40, upstream="9" * 40)))
+        self.assertNotEqual(sync.candidate_name("1" * 40, cur),
+                            sync.candidate_name("1" * 40, self._lock("1" * 40, vcpkg="e" * 40)))
+        self.assertNotEqual(sync.candidate_name("1" * 40, cur),
+                            sync.candidate_name("2" * 40, self._lock("2" * 40)))
 
 
 class IntegrationTests(unittest.TestCase):
@@ -341,24 +453,21 @@ class BuildCacheContractTests(unittest.TestCase):
                 return step
         self.fail(f"{name}: step {step_name!r} not found")
 
-    @staticmethod
-    def _key_outputs(run_block):
-        # Every entry in the "Compute cache keys" $Out array is a quoted
-        # "name=value" line; those names are the outputs downstream expressions may
-        # reference as steps.cache-keys.outputs.<name>.
-        return set(re.findall(r'(?m)^\s+"([a-z0-9_]+)=[^"]*"', run_block))
-
     def test_every_consumed_cache_key_is_generated(self):
         # The "Input required and not supplied: key" failure: a consuming expression
-        # named an output the compute step never emits (the vpkgsrc_key typo).
+        # named an output the compute step never emits (the vpkgsrc_key typo). Key
+        # derivation now lives in automation/cache_keys.py; its OUTPUT_NAMES is the
+        # authoritative set of emitted outputs, so every steps.cache-keys.outputs.<name>
+        # consumed by the workflow must be one of them.
         for name in self.WORKFLOWS:
-            generated = self._key_outputs(self._step(name, "Compute cache keys")["run"])
-            self.assertGreater(len(generated), 0,
-                               f"{name}: no cache-key output entries in the compute step")
+            run = self._step(name, "Compute cache keys")["run"]
+            self.assertIn("python automation/cache_keys.py", run,
+                          f"{name}: compute step must delegate to automation/cache_keys.py")
             consumed = set(re.findall(r"steps\.cache-keys\.outputs\.([A-Za-z0-9_]+)", self.raw[name]))
-            self.assertEqual(consumed - generated, set(),
-                             f"{name}: consumed cache-key outputs the compute step never "
-                             f"generates: {sorted(consumed - generated)}")
+            self.assertTrue(consumed, f"{name}: no cache-key outputs consumed (unexpected)")
+            self.assertEqual(consumed - set(cache_keys.OUTPUT_NAMES), set(),
+                             f"{name}: consumed cache-key outputs cache_keys.py never "
+                             f"emits: {sorted(consumed - set(cache_keys.OUTPUT_NAMES))}")
 
     def test_no_broken_vpkg_token_remains(self):
         # "vcpkg" does not contain "vpkg" as a substring, so any "vpkg" hit can only be
@@ -406,16 +515,18 @@ class BuildCacheContractTests(unittest.TestCase):
                                 f"{name}: bare actions/cache (implicit post-save) is present")
 
     def test_fingerprints_use_clean_hex_and_a_sorted_file_list(self):
-        # [BitConverter]::ToString yields a hyphen-separated string, so its 16-char
-        # prefix was not a clean hex fingerprint; the file list must also be sorted so
-        # the hash is stable across runners with different git index ordering.
+        # The flag/dependency fingerprints moved from inline PowerShell to
+        # automation/cache_keys.py, where the clean-hex + sorted-file-list guarantees are
+        # unit-tested (automation/test_cache.py). The workflows must not reintroduce an
+        # inline PowerShell fingerprint that could drift from the tested module.
         for name in self.WORKFLOWS:
             self.assertNotIn("[BitConverter]::ToString", self.raw[name],
                              f"{name}: hyphen-separated fingerprint (BitConverter::ToString)")
-            self.assertIn("[Convert]::ToHexString", self.raw[name],
-                          f"{name}: clean hex fingerprint (Convert::ToHexString) missing")
-            self.assertIn("| Sort-Object)", self.raw[name],
-                          f"{name}: fingerprint file list is not sorted deterministically")
+            self.assertNotIn("[Convert]::ToHexString", self.raw[name],
+                             f"{name}: inline PowerShell fingerprint (must live in cache_keys.py)")
+            self.assertIn("python automation/cache_keys.py",
+                          self._step(name, "Compute cache keys")["run"],
+                          f"{name}: compute step must use automation/cache_keys.py")
 
     def test_schema_version_does_not_reuse_broken_entries(self):
         settings = json.loads((Path(__file__).resolve().parents[1] / "automation" /

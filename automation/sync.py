@@ -1,4 +1,22 @@
-"""Merge headpiece/dev into a candidate; update dependency pins without rewriting local work."""
+"""Merge headpiece/dev into a candidate; refresh dependency pins on an independent cadence.
+
+Two logically independent triggers produce candidates, each with its own schedule:
+
+  * ``--mode source``        (every 6 hours) — captures a new headpiece/dev source
+    snapshot. Dependency pins stay at the values already locked; a candidate is created
+    only when the source (or our own build-affecting automation) actually changed.
+  * ``--mode dependencies``  (daily)          — re-resolves the pinned dependencies
+    (FFmpeg + vcpkg) and creates a candidate only when a real dependency update is
+    available. The source stays at the already-locked headpiece snapshot.
+
+``sync.plan_sync`` (this module) hosts the pure decision logic so the scheduling rules
+are unit-testable without git or network. The build-affecting fingerprint intentionally
+EXCLUDES ``upstream_master_sha``: that field is provenance only, so upstream master
+moving on its own can no longer manufacture a build candidate.
+
+Idempotency: a candidate branch name is deterministic per (source, build fingerprint),
+so a repeated no-change run reuses the existing branch and never rewrites it.
+"""
 from __future__ import annotations
 import argparse
 import hashlib
@@ -7,6 +25,10 @@ import os
 from pathlib import Path
 import re
 import subprocess
+
+# Lock fields that change the build output. ``upstream_master_sha`` is deliberately
+# omitted: it records where upstream master was, but does not affect compilation.
+BUILD_FIELDS = ("cuda_version", "vcpkg_sha", "ffmpeg", "automation_sha256", "headpiece_sha")
 
 
 def run(args, *, check=True, input=None):
@@ -34,11 +56,56 @@ def output(name, value):
     print(f"{name}={value}")
 
 
+def deps_of(lock):
+    """Extract the dependency sub-dict (the fields a dependency refresh may move)."""
+    return {k: lock[k] for k in ("cuda_version", "vcpkg_sha", "ffmpeg")}
+
+
+def build_lock(source_sha, deps, automation_sha256, upstream_master_sha):
+    lock = dict(deps)
+    lock["automation_sha256"] = automation_sha256
+    lock["headpiece_sha"] = source_sha
+    lock["upstream_master_sha"] = upstream_master_sha
+    return lock
+
+
+def build_fingerprint(lock):
+    """Only the build-affecting fields; used to decide whether a candidate is needed."""
+    return {k: lock[k] for k in BUILD_FIELDS}
+
+
 def candidate_name(source_sha, lock):
     if not re.fullmatch(r"[0-9a-f]{40}", source_sha):
         raise ValueError("Invalid source SHA")
-    digest = hashlib.sha256(json.dumps(lock, sort_keys=True).encode()).hexdigest()[:12]
+    digest = hashlib.sha256(json.dumps(build_fingerprint(lock), sort_keys=True).encode()).hexdigest()[:12]
     return f"sync/headpiece-{source_sha[:12]}-{digest}"
+
+
+def plan_sync(current_lock, *, source_sha, source_is_ancestor, resolved_deps,
+              automation_sha256, upstream_sha, mode, force):
+    """Pure scheduling decision. Returns (new_lock, changed, merge_source_sha).
+
+    ``merge_source_sha`` is the commit to record in the lock and merge into the
+    candidate. No git/network here — the caller supplies the facts.
+    """
+    if current_lock is None:
+        # First run: nothing is pinned yet, so capture source and dependencies together.
+        return build_lock(source_sha, resolved_deps, automation_sha256, upstream_sha), True, source_sha
+    if mode == "source":
+        # Source may move; dependencies stay pinned; provenance refreshed for the record.
+        src = current_lock["headpiece_sha"] if source_is_ancestor else source_sha
+        deps = deps_of(current_lock)
+        upstream = upstream_sha
+    elif mode == "dependencies":
+        # Source stays pinned; dependencies may move to the freshly resolved values.
+        src = current_lock["headpiece_sha"]
+        deps = resolved_deps
+        upstream = current_lock["upstream_master_sha"]
+    else:
+        raise ValueError("unknown mode: " + mode)
+    new_lock = build_lock(src, deps, automation_sha256, upstream)
+    changed = (build_fingerprint(new_lock) != build_fingerprint(current_lock)) or force
+    return new_lock, changed, src
 
 
 def resolve_dependencies(settings):
@@ -69,6 +136,8 @@ def report_conflict(repo, source_sha, message):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--force-build", action="store_true")
+    parser.add_argument("--mode", choices=["source", "dependencies"], default="source",
+                        help="which cadence produced this run (default: source)")
     args = parser.parse_args()
     settings = json.loads(Path("automation/settings.json").read_text(encoding="utf-8"))
     repo = os.environ.get("GITHUB_REPOSITORY", "")
@@ -83,32 +152,36 @@ def main():
     base_sha = git("rev-parse", "HEAD").stdout.strip()
     git("fetch", f"https://github.com/{settings['source_repository']}.git", settings["source_branch"])
     source_sha = git("rev-parse", "FETCH_HEAD").stdout.strip()
-    lock = resolve_dependencies(settings)
+    resolved_deps = resolve_dependencies(settings)
     automation_tree = git("ls-tree", "-r", "HEAD", "--", "automation", ".github/workflows/brx-sync-build.yml").stdout
     automation_entries = "\n".join(line for line in automation_tree.splitlines()
                                    if not line.endswith("\tautomation/dependencies.lock.json"))
-    lock["automation_sha256"] = hashlib.sha256(automation_entries.encode()).hexdigest()
-    lock["headpiece_sha"] = source_sha
-    lock["upstream_master_sha"] = api(f"repos/{settings['upstream_repository']}/commits/{settings['upstream_branch']}")["sha"]
+    automation_sha256 = hashlib.sha256(automation_entries.encode()).hexdigest()
+    upstream_sha = api(f"repos/{settings['upstream_repository']}/commits/{settings['upstream_branch']}")["sha"]
     ancestor = git("merge-base", "--is-ancestor", source_sha, "HEAD", check=False)
     if ancestor.returncode not in (0, 1):
         raise RuntimeError("Cannot compare source history")
+    source_is_ancestor = ancestor.returncode == 0
     path = Path("automation/dependencies.lock.json")
     current = json.loads(path.read_text()) if path.exists() else None
-    if ancestor.returncode == 0 and current == lock and not args.force_build:
+    lock, changed, merge_sha = plan_sync(
+        current, source_sha=source_sha, source_is_ancestor=source_is_ancestor,
+        resolved_deps=resolved_deps, automation_sha256=automation_sha256,
+        upstream_sha=upstream_sha, mode=args.mode, force=args.force_build)
+    if not changed:
         output("changed", "false")
         return
-    branch = candidate_name(source_sha, lock)
+    branch = candidate_name(merge_sha, lock)
     # A manual forced retry gets a fresh branch name and package rather than modifying an old tag.
     if args.force_build:
         branch += "-run" + os.environ.get("GITHUB_RUN_ID", "local")
     git("checkout", "-B", branch)
-    merged = git("merge", "--no-edit", source_sha, check=False)
+    merged = git("merge", "--no-edit", merge_sha, check=False)
     if merged.returncode:
         conflicts = git("diff", "--name-only", "--diff-filter=U", check=False).stdout
         conflict_paths = conflicts.splitlines()
         if not conflict_paths or any(not name.startswith(".github/workflows/") for name in conflict_paths):
-            report_conflict(repo, source_sha, merged.stdout + merged.stderr + "\n" + conflicts)
+            report_conflict(repo, merge_sha, merged.stdout + merged.stderr + "\n" + conflicts)
             git("merge", "--abort", check=False)
             raise RuntimeError("Merge stopped; no changes pushed to dev")
         git("restore", "--source=" + base_sha, "--staged", "--worktree", "--", ".github/workflows")
@@ -120,9 +193,9 @@ def main():
     path.write_text(json.dumps(lock, indent=2) + "\n", encoding="utf-8")
     git("add", "automation/dependencies.lock.json")
     if git("diff", "--cached", "--quiet", check=False).returncode:
-        git("commit", "-m", "chore(automation): pin candidate source and dependencies")
+        git("commit", "-m", f"chore(automation): pin candidate source and dependencies ({args.mode})")
     elif args.force_build:
-        git("commit", "--allow-empty", "-m", "chore(automation): rebuild pinned candidate")
+        git("commit", "--allow-empty", "-m", f"chore(automation): rebuild pinned candidate ({args.mode})")
     # Retry an existing identical candidate safely; never force-rewrite a branch.
     pushed = git("push", "origin", "HEAD:refs/heads/" + branch, check=False)
     if pushed.returncode:
@@ -137,6 +210,7 @@ def main():
     output("candidate", branch)
     output("candidate_sha", sha)
     output("base_sha", base_sha)
+    output("mode", args.mode)
 
 
 if __name__ == "__main__":
