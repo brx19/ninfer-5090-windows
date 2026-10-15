@@ -1,0 +1,193 @@
+name: BRX sync build and release
+
+on:
+  schedule:
+    - cron: '17 */6 * * *'
+  push:
+    branches: [dev]
+    paths: ['automation/**', '.github/workflows/brx-sync-build.yml']
+  workflow_dispatch:
+    inputs:
+      force_build:
+        type: boolean
+        default: false
+        description: Rebuild even if source and dependency pins did not change
+
+permissions:
+  contents: read
+
+concurrency:
+  group: brx-update-pipeline
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: github.repository == 'brx19/ninfer-5090-windows'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+    outputs:
+      changed: ${{ steps.sync.outputs.changed }}
+      candidate: ${{ steps.sync.outputs.candidate }}
+      sha: ${{ steps.sync.outputs.candidate_sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: dev
+          fetch-depth: 0
+          token: ${{ secrets.BRX_SYNC_TOKEN || github.token }}
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: '3.12'
+      - name: Synchronize headpiece and pin dependencies
+        id: sync
+        env:
+          GH_TOKEN: ${{ secrets.BRX_SYNC_TOKEN || github.token }}
+          FORCE_BUILD: ${{ inputs.force_build || false }}
+        run: |
+          args=()
+          if [ "$FORCE_BUILD" = "true" ]; then args+=(--force-build); fi
+          python automation/sync.py "${args[@]}"
+      - name: Save merge-conflict evidence
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sync-conflict-${{ github.run_id }}
+          path: automation-conflict.log
+          if-no-files-found: ignore
+
+  build:
+    needs: sync
+    if: needs.sync.outputs.changed == 'true'
+    runs-on: windows-2025
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.sync.outputs.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: '3.12'
+      - uses: Jimver/cuda-toolkit@b8bf9c6c28f8a92fbb04dcfcaee872e60c57462d # v0.2.36
+        with:
+          cuda: '13.3.0'
+          method: network
+          sub-packages: '["nvcc", "crt", "cudart", "thrust", "nvrtc", "nvrtc_dev", "nvjitlink", "nvfatbin", "cublas", "cublas_dev", "visual_studio_integration"]'
+      - name: Validate Python automation
+        shell: pwsh
+        run: python -m compileall -q automation
+      - name: Configure build and package Windows runtime
+        shell: pwsh
+        run: ./automation/build.ps1
+      - name: Save release archive and checksum
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ninfer-runtime-${{ github.run_id }}
+          path: |
+            dist/*.zip
+            dist/*.sha256
+          if-no-files-found: error
+          retention-days: 30
+      - name: Save build diagnostics
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-build-diagnostics-${{ github.run_id }}
+          path: |
+            build/CMakeFiles/CMakeConfigureLog.yaml
+            automation/dependencies.lock.json
+          if-no-files-found: ignore
+
+  candidate-release:
+    needs: [sync, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.sync.outputs.sha }}
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ninfer-runtime-${{ github.run_id }}
+          path: dist
+      - name: Publish immutable-source prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_SHA: ${{ needs.sync.outputs.sha }}
+          CANDIDATE_BRANCH: ${{ needs.sync.outputs.candidate }}
+        run: python automation/publish.py --sha "$CANDIDATE_SHA" --candidate "$CANDIDATE_BRANCH"
+
+  gpu:
+    needs: [sync, build, candidate-release]
+    if: vars.ENABLE_GPU_QUALIFICATION == 'true'
+    runs-on: [self-hosted, Windows, X64, rtx5090]
+    timeout-minutes: 330
+    concurrency:
+      group: brx-rtx5090
+      cancel-in-progress: false
+    env:
+      NINFER_TEST_ARTIFACT: ${{ vars.NINFER_TEST_ARTIFACT }}
+      NINFER_CUDA_PATH: ${{ vars.NINFER_CUDA_PATH }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.sync.outputs.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ninfer-runtime-${{ github.run_id }}
+          path: dist
+      - name: Run the source suite and required-model gate
+        shell: pwsh
+        run: ./automation/build.ps1 -GpuTests
+      - name: Test the exact published binary
+        shell: pwsh
+        run: python automation/gpu_smoke.py --artifact "$env:NINFER_TEST_ARTIFACT"
+      - name: Save qualification and diagnostic evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: qualification-${{ github.run_id }}
+          path: |
+            dist/qualification.json
+            dist/gpu-smoke-server.log
+            build-test/Testing/Temporary/*.log
+          if-no-files-found: ignore
+
+  integrate:
+    needs: [sync, build, candidate-release, gpu]
+    if: always() && needs.build.result == 'success' && needs.candidate-release.result == 'success' && (needs.gpu.result == 'success' || needs.gpu.result == 'skipped')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.sync.outputs.sha }}
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ninfer-runtime-${{ github.run_id }}
+          path: dist
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: needs.gpu.result == 'success'
+        with:
+          name: qualification-${{ github.run_id }}
+          path: dist
+      - name: Promote GPU-qualified release and integrate candidate
+        env:
+          GH_TOKEN: ${{ secrets.BRX_SYNC_TOKEN || github.token }}
+          CANDIDATE_SHA: ${{ needs.sync.outputs.sha }}
+          CANDIDATE_BRANCH: ${{ needs.sync.outputs.candidate }}
+          GPU_RESULT: ${{ needs.gpu.result }}
+        run: |
+          args=(--sha "$CANDIDATE_SHA" --candidate "$CANDIDATE_BRANCH" --integrate)
+          if [ "$GPU_RESULT" = "success" ]; then args+=(--qualified); fi
+          python automation/publish.py "${args[@]}"
