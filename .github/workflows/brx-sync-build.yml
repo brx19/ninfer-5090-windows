@@ -125,10 +125,10 @@ jobs:
           # Fingerprint of every file that defines compile flags, link behavior, or build
           # arguments. Any change moves the exact key; the fallback keys still restore the
           # old cache, and per-entry content addressing decides what actually hits.
-          $FlagFiles = @(git ls-files -- 'CMakeLists.txt' 'cmake/*' 'apps/CMakeLists.txt' 'src/CMakeLists.txt' 'src/*/CMakeLists.txt' 'src/*/*/CMakeLists.txt' 'tests/CMakeLists.txt' 'bench/CMakeLists.txt' 'third_party/*/CMakeLists.txt' 'automation/build.ps1')
+          $FlagFiles = @((git ls-files -- 'CMakeLists.txt' 'cmake/*' 'apps/CMakeLists.txt' 'src/CMakeLists.txt' 'src/*/CMakeLists.txt' 'src/*/*/CMakeLists.txt' 'tests/CMakeLists.txt' 'bench/CMakeLists.txt' 'third_party/*/CMakeLists.txt' 'automation/build.ps1') | Sort-Object)
           if ($FlagFiles.Count -eq 0) { throw "Flag fingerprint found no CMake files; refusing to compute a cache key" }
-          $FlagHash = [BitConverter]::ToString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes(($FlagFiles | ForEach-Object { (Get-FileHash -LiteralPath $_ -Algorithm SHA256).Hash }) -join "|"))).Substring(0, 16).ToLowerInvariant()
-          $DepHash = [BitConverter]::ToString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes("$($Lock.vcpkg_sha)$($Lock.ffmpeg.sha256)$($Lock.cuda_version)"))).Substring(0, 16).ToLowerInvariant()
+          $FlagHash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes(($FlagFiles | ForEach-Object { (Get-FileHash -LiteralPath $_ -Algorithm SHA256).Hash }) -join "|"))).ToLowerInvariant().Substring(0, 16)
+          $DepHash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes("$($Lock.vcpkg_sha)$($Lock.ffmpeg.sha256)$($Lock.cuda_version)"))).ToLowerInvariant().Substring(0, 16)
           $Os = $env:RUNNER_OS.ToLowerInvariant()
           $Arch = $env:RUNNER_ARCH.ToLowerInvariant()
           $Schema = $Settings.build_cache.schema
@@ -155,7 +155,7 @@ jobs:
 
       - name: Restore compiler caches
         id: compiler-caches
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: |
             D:\ninfer-cache\sccache-cpp
@@ -168,14 +168,14 @@ jobs:
 
       - name: Restore vcpkg checkout
         id: vcpkg-checkout
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: D:\ninfer-cache\vcpkg
           key: ${{ steps.cache-keys.outputs.vcpkgsrc_key }}
 
       - name: Restore vcpkg binary cache
         id: vcpkg-binary
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: D:\ninfer-cache\vcpkg-bin
           key: ${{ steps.cache-keys.outputs.vcpkgbin_key }}
@@ -184,7 +184,7 @@ jobs:
 
       - name: Restore FFmpeg archive
         id: ffmpeg
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: D:\ninfer-cache\ffmpeg
           key: ${{ steps.cache-keys.outputs.ffmpeg_key }}
@@ -203,6 +203,11 @@ jobs:
         if: always()
         id: cache-metrics
         shell: pwsh
+        env:
+          COMPILER_CACHE_HIT: ${{ steps['compiler-caches'].outputs['cache-hit'] }}
+          VCPKG_SOURCE_CACHE_HIT: ${{ steps['vcpkg-checkout'].outputs['cache-hit'] }}
+          VCPKG_BINARY_CACHE_HIT: ${{ steps['vcpkg-binary'].outputs['cache-hit'] }}
+          FFMPEG_CACHE_HIT: ${{ steps['ffmpeg'].outputs['cache-hit'] }}
         run: |
           $Lines = New-Object System.Collections.Generic.List[string]
           $Lines.Add("## NInfer build cache report")
@@ -219,10 +224,10 @@ jobs:
           } else {
               $Lines.Add("no cache metrics written (the build script did not reach its metrics step)")
           }
-          $Flags = @()
-          foreach ($Step in @("compiler-caches-restore", "vcpkg-checkout-restore", "vcpkg-binary-restore", "ffmpeg-restore")) {
-              $Prop = $steps.PSObject.Properties[$Step]
-              if ($null -ne $Prop) { $Flags.Add("$Step cache-hit=" + $Prop.Value.outputs["cache-hit"]) }
+          $Flags = New-Object System.Collections.Generic.List[string]
+          foreach ($Name in @("COMPILER", "VCPKG_SOURCE", "VCPKG_BINARY", "FFMPEG")) {
+              $Hit = [string][System.Environment]::GetEnvironmentVariable($Name + "_CACHE_HIT")
+              if ($Hit.Trim().Length -gt 0) { $Flags.Add("$Name cache-hit=$Hit") } else { $Flags.Add("$Name cache-hit=unavailable") }
           }
           if ($Flags.Count) { $Lines.Add("actions/cache restore: " + ($Flags -join '; ')) }
           # Storage budget guard: never let a save push this repo past its 10 GB cache quota.
@@ -245,13 +250,14 @@ jobs:
             dist/*.sha256
           if-no-files-found: error
           retention-days: 30
-      # Explicit saves after the release archive: a save failure (quota, service)
-      # must never fail the job or block publication, so each save is guarded by the
-      # 7 GiB budget check and allowed to fail. Explicit saves also disable the
-      # implicit end-of-job save, which is what we want: nothing is persisted from a
-      # failed build.
+      # Explicit saves after the release archive. The restore steps use
+      # actions/cache/restore (no implicit end-of-job save), so these explicit saves are
+      # the only path that persists cache contents. Nothing is persisted from a failed
+      # build, and a save is skipped when its restore step reports an exact cache hit.
+      # A save failure (quota, service) must never fail the job or block publication, so
+      # each save is guarded by the 7 GiB budget check and allowed to fail.
       - name: Save compiler caches
-        if: success() && steps.cache-metrics.outputs.save_enabled == 'true'
+        if: success() && steps.cache-metrics.outputs.save_enabled == 'true' && steps['compiler-caches'].outputs['cache-hit'] != 'true'
         continue-on-error: true
         uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
@@ -260,21 +266,21 @@ jobs:
             D:\ninfer-cache\sccache-cuda
           key: ${{ steps.cache-keys.outputs.sccache_key }}
       - name: Save vcpkg checkout
-        if: success() && steps.cache-metrics.outputs.save_enabled == 'true'
+        if: success() && steps.cache-metrics.outputs.save_enabled == 'true' && steps['vcpkg-checkout'].outputs['cache-hit'] != 'true'
         continue-on-error: true
         uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: D:\ninfer-cache\vcpkg
-          key: ${{ steps.cache-keys.outputs.vpkgsrc_key }}
+          key: ${{ steps.cache-keys.outputs.vcpkgsrc_key }}
       - name: Save vcpkg binary cache
-        if: success() && steps.cache-metrics.outputs.save_enabled == 'true'
+        if: success() && steps.cache-metrics.outputs.save_enabled == 'true' && steps['vcpkg-binary'].outputs['cache-hit'] != 'true'
         continue-on-error: true
         uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
-          path: D:\ninfer-cache\vpkg-bin
-          key: ${{ steps.cache-keys.outputs.vpkgbin_key }}
+          path: D:\ninfer-cache\vcpkg-bin
+          key: ${{ steps.cache-keys.outputs.vcpkgbin_key }}
       - name: Save FFmpeg archive
-        if: success() && steps.cache-metrics.outputs.save_enabled == 'true'
+        if: success() && steps.cache-metrics.outputs.save_enabled == 'true' && steps['ffmpeg'].outputs['cache-hit'] != 'true'
         continue-on-error: true
         uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
