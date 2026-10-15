@@ -43,6 +43,8 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: '3.12'
+      - name: Install automation test dependencies
+        run: python -m pip install --quiet -r automation/requirements.txt
       - name: Verify synchronization and packaging guards
         run: python automation/test_automation.py -q
       - name: Synchronize headpiece and pin dependencies
