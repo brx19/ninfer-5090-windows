@@ -5,8 +5,10 @@ a candidate while preserving local commits; it never force-pushes dev.
 Source and mutable dependency assets are resolved into dependencies.lock.json
 before a build. Neroued/master is recorded, not independently merged.
 
-Cloud builds publish runtime-only prereleases. They are not equivalent to the
-maintainer's original release gate or a GPU performance qualification.
+Cloud builds compile the explicit `ninfer-serve` CMake target and publish one
+minimal final archive. The archive contains exactly one application executable,
+the imported distributable DLL closure, build provenance, licenses and checksums.
+It is not equivalent to a GPU performance qualification.
 With ENABLE_GPU_QUALIFICATION=true and an online Windows/rtx5090 runner,
 the existing model-required randomized suite and the exact published binary
 smoke test must pass before promotion/integration. This functional GPU test
@@ -18,12 +20,20 @@ automatically. A dependency/API/merge failure stops the candidate; previous dev
 and previous releases remain available. Runtime installation into JIT-Gateway
 is a separate operation and does not occur through this pipeline.
 
-After a successful build, integration fast-forwards dev with force=false. It
-requires no pull-request creation setting or personal token. A concurrent local
-commit makes integration fail safely and is included in the next candidate.
-This fork owns .github/workflows; upstream workflow edits are not imported.
+After a successful build, finalization validates the archive, fast-forwards dev
+with force=false, publishes and verifies a normal immutable release, and only
+then deletes the exact automation-owned candidate branch. It requires no personal
+token. A concurrent dev commit makes integration fail safely and is included in
+the next candidate. The fork owns `.github/workflows` and `automation`; upstream
+changes cannot replace control-plane code that later receives a write token.
 Engine code and vendored dependencies are merged normally. Automation changes
 also trigger a build; generated lock files do not cause endless rebuilds.
+
+If integration succeeds but release publication or cleanup fails, the candidate
+branch remains. `BRX release recovery` accepts the original run ID, candidate SHA,
+base SHA and branch, downloads the retained verified artifact, resumes idempotently,
+and refuses to overwrite a different release asset. Artifact retention is 30 days;
+after expiry a fresh validated build is required.
 
 GitHub-hosted builds use a persistent cache under D:\ninfer-cache with four
 independent actions/cache layers: the sccache C/C++ cache, the sccache CUDA

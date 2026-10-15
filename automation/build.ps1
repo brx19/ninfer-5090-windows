@@ -274,18 +274,57 @@ $PhaseStopwatch = [Diagnostics.Stopwatch]::StartNew()
 Invoke-Checked cmake $ConfigureArgs
 $ConfigureSeconds = [math]::Round($PhaseStopwatch.Elapsed.TotalSeconds, 1)
 $PhaseStopwatch.Restart()
-Invoke-Checked cmake @("--build", "build", "--config", "Release", "--parallel", "4")
+Invoke-Checked cmake @("--build", "build", "--target", "ninfer-serve", "--config", "Release", "--parallel", "4")
 $BuildSeconds = [math]::Round($PhaseStopwatch.Elapsed.TotalSeconds, 1)
 $Stage = Join-Path $RepoRoot "dist/package"
+if (Test-Path -LiteralPath $Stage) { Remove-Item -LiteralPath $Stage -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $Stage | Out-Null
-foreach ($Name in @("ninfer-serve.exe", "ninfer.exe", "ninfer-perplexity.exe")) {
-    $Image = Join-Path $RepoRoot "build/apps/$Name"
-    if (-not (Test-Path -LiteralPath $Image)) { throw "Missing release executable: $Image" }
-    Copy-Item -LiteralPath $Image -Destination $Stage
+$Image = Join-Path $RepoRoot "build/apps/ninfer-serve.exe"
+if (-not (Test-Path -LiteralPath $Image)) { throw "Missing release executable: $Image" }
+Copy-Item -LiteralPath $Image -Destination $Stage
+
+# Stage only non-system DLLs reachable from the server's PE import graph. dumpbin
+# /dependents includes normal and delay-loaded dependencies; every bundled DLL is
+# then scanned recursively. NVIDIA's driver DLL and Windows system DLLs are supplied
+# by the target machine and must not be redistributed.
+$RuntimeRoots = @((Resolve-Path "ffmpeg/bin").Path, (Resolve-Path "$CurlPrefix/bin").Path, (Resolve-Path "$($env:CUDA_PATH)/bin").Path)
+$SystemDlls = @(
+    "advapi32.dll", "bcrypt.dll", "cfgmgr32.dll", "crypt32.dll", "d3d12.dll", "dbghelp.dll",
+    "gdi32.dll", "iphlpapi.dll", "kernel32.dll", "ncrypt.dll", "nvcuda.dll", "ole32.dll",
+    "oleaut32.dll", "rpcrt4.dll", "secur32.dll", "shell32.dll", "shlwapi.dll", "user32.dll",
+    "userenv.dll", "version.dll", "winhttp.dll", "winmm.dll", "ws2_32.dll", "wtsapi32.dll"
+)
+function Get-PeDependencies {
+    param([string]$Binary)
+    $Lines = & dumpbin /nologo /dependents $Binary 2>&1
+    if ($LASTEXITCODE -ne 0) { throw "dumpbin failed for $Binary" }
+    return @($Lines | ForEach-Object {
+        if ($_ -match '^\s+([A-Za-z0-9_.+-]+\.dll)\s*$') { $Matches[1] }
+    } | Sort-Object -Unique)
 }
-Copy-Item "ffmpeg/bin/*.dll" $Stage
-Copy-Item "$CurlPrefix/bin/*.dll" $Stage
-Copy-Item "$($env:CUDA_PATH)/bin/cudart64*.dll" $Stage -ErrorAction SilentlyContinue
+$Pending = [Collections.Generic.Queue[string]]::new()
+$Pending.Enqueue((Join-Path $Stage "ninfer-serve.exe"))
+$Scanned = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+$Bundled = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+while ($Pending.Count -gt 0) {
+    $Binary = $Pending.Dequeue()
+    if (-not $Scanned.Add($Binary)) { continue }
+    foreach ($Dependency in Get-PeDependencies $Binary) {
+        $Lower = $Dependency.ToLowerInvariant()
+        $SystemPath = Join-Path $env:SystemRoot "System32/$Dependency"
+        if ($Lower.StartsWith("api-ms-win-") -or $Lower.StartsWith("ext-ms-win-") -or
+            $SystemDlls -contains $Lower -or Test-Path -LiteralPath $SystemPath) { continue }
+        $Matches = @($RuntimeRoots | ForEach-Object { Join-Path $_ $Dependency } | Where-Object { Test-Path -LiteralPath $_ })
+        if ($Matches.Count -eq 0) { throw "Required distributable DLL was not found: $Dependency (imported by $Binary)" }
+        $SourceDll = $Matches[0]
+        $DestinationDll = Join-Path $Stage $Dependency
+        if ($Bundled.Add($Dependency)) {
+            Copy-Item -LiteralPath $SourceDll -Destination $DestinationDll
+            $Pending.Enqueue($DestinationDll)
+        }
+    }
+}
+Write-Host "Bundled runtime DLLs: $((@($Bundled) | Sort-Object) -join ', ')"
 foreach ($Name in @("LICENSE", "NOTICE")) { Copy-Item -LiteralPath $Name -Destination $Stage }
 $Licenses = Join-Path $Stage "licenses"
 New-Item -ItemType Directory -Force -Path $Licenses | Out-Null
@@ -303,6 +342,7 @@ foreach ($LicenseFile in Get-ChildItem "third_party" -Recurse -File | Where-Obje
 }
 $env:BRX_NINFER_NVCC_VERSION = $NvccVersion -join "`n"
 $env:BRX_NINFER_MSVC_VERSION = $env:VCToolsVersion
+$env:BRX_NINFER_BUILD_TIMESTAMP = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
 # The Windows hosted runner may have no NVIDIA driver, even for --help: this
 # executable imports nvcuda.dll. Record that gap instead of treating a build as a GPU test.
 $env:BRX_NINFER_LOADER_SMOKE = "skipped_no_nvidia_driver"
@@ -321,16 +361,13 @@ if (Test-Path -LiteralPath (Join-Path $env:SystemRoot "System32/nvcuda.dll")) {
 # for a cached and an uncached build mean the launcher changed no bits.
 if ($env:NINFER_EMIT_BINARY_FINGERPRINT -eq '1') {
     $FingerprintLines = New-Object System.Collections.Generic.List[string]
-    foreach ($Name in @("ninfer-serve.exe", "ninfer.exe", "ninfer-perplexity.exe")) {
-        $Image = Join-Path $RepoRoot "build/apps/$Name"
-        $Hash = (Get-FileHash -LiteralPath $Image -Algorithm SHA256).Hash
-        $FingerprintLines.Add("== $Name")
-        $FingerprintLines.Add("sha256: $Hash")
-        $FingerprintLines.Add("--- exports ---")
-        $FingerprintLines.AddRange(((& dumpbin /exports $Image 2>&1) | Out-String).Trim() -split "`r?`n")
-        $FingerprintLines.Add("--- dependencies ---")
-        $FingerprintLines.AddRange(((& dumpbin /dependencies $Image 2>&1) | Out-String).Trim() -split "`r?`n")
-    }
+    $Hash = (Get-FileHash -LiteralPath $Image -Algorithm SHA256).Hash
+    $FingerprintLines.Add("== ninfer-serve.exe")
+    $FingerprintLines.Add("sha256: $Hash")
+    $FingerprintLines.Add("--- exports ---")
+    $FingerprintLines.AddRange(((& dumpbin /exports $Image 2>&1) | Out-String).Trim() -split "`r?`n")
+    $FingerprintLines.Add("--- dependencies ---")
+    $FingerprintLines.AddRange(((& dumpbin /dependencies $Image 2>&1) | Out-String).Trim() -split "`r?`n")
     [IO.File]::WriteAllLines((Join-Path $RepoRoot "build/binary-fingerprint.txt"), $FingerprintLines, [Text.UTF8Encoding]::new($false))
     Write-Host "Binary fingerprint written to build/binary-fingerprint.txt"
 }

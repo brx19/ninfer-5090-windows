@@ -32,6 +32,9 @@ jobs:
   build:
     runs-on: windows-2025
     timeout-minutes: 90
+    permissions:
+      contents: read
+      actions: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -63,32 +66,32 @@ jobs:
         id: cache-keys
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
           $Lock = Get-Content -LiteralPath "automation/dependencies.lock.json" -Raw | ConvertFrom-Json
           $Settings = Get-Content -LiteralPath "automation/settings.json" -Raw | ConvertFrom-Json
           $VsWhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio/Installer/vswhere.exe"
           $VsRoot = & $VsWhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
           if (-not $VsRoot) { throw "Visual Studio Desktop C++ workload not found" }
           $MsvcVersion = (Get-ChildItem (Join-Path $VsRoot "VC\Tools\MSVC") | Sort-Object { [version]$_.Name } -Descending | Select-Object -First 1).Name
-          $FlagFiles = @((git ls-files -- 'CMakeLists.txt' 'cmake/*' 'apps/CMakeLists.txt' 'src/CMakeLists.txt' 'src/*/CMakeLists.txt' 'src/*/*/CMakeLists.txt' 'tests/CMakeLists.txt' 'bench/CMakeLists.txt' 'third_party/*/CMakeLists.txt' 'automation/build.ps1') | Sort-Object)
-          if ($FlagFiles.Count -eq 0) { throw "Flag fingerprint found no CMake files; refusing to compute a cache key" }
-          $FlagHash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes(($FlagFiles | ForEach-Object { (Get-FileHash -LiteralPath $_ -Algorithm SHA256).Hash }) -join "|"))).ToLowerInvariant().Substring(0, 16)
-          $DepHash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes("$($Lock.vcpkg_sha)$($Lock.ffmpeg.sha256)$($Lock.cuda_version)"))).ToLowerInvariant().Substring(0, 16)
-          $Os = $env:RUNNER_OS.ToLowerInvariant()
-          $Arch = $env:RUNNER_ARCH.ToLowerInvariant()
-          $Schema = $Settings.build_cache.schema
-          $SccPrefix = "ninfer-cache$Schema-sccache-$Os-$Arch-msvc$MsvcVersion-cuda$($Lock.cuda_version)-sm120a"
-          $SccacheKey = "$($SccPrefix)-flags$FlagHash-deps$DepHash-sc$($Settings.build_cache.sccache.version)"
-          $Out = @(
-            "sccache_key=$SccacheKey",
-            "sccache_restore1=$($SccPrefix)-flags$FlagHash-",
-            "sccache_restore2=$($SccPrefix)-",
-            "sccache_restore3=ninfer-cache$Schema-sccache-$Os-$Arch-",
-            "vcpkgsrc_key=ninfer-cache$Schema-vcpkgsrc-$Os-$Arch-$($Lock.vcpkg_sha)",
-            "vcpkgbin_key=ninfer-cache$Schema-vcpkgbin-$Os-$Arch-msvc$MsvcVersion-triplet-x64-windows-vcpkg$($Lock.vcpkg_sha)",
-            "vcpkgbin_restore=ninfer-cache$Schema-vcpkgbin-$Os-$Arch-msvc$MsvcVersion-triplet-x64-windows-",
-            "ffmpeg_key=ninfer-cache$Schema-ffmpeg-$($Lock.ffmpeg.sha256)"
-          )
-          Set-Content -LiteralPath $env:GITHUB_OUTPUT -Value $Out
+          # Key derivation lives in automation/cache_keys.py so the compatibility
+          # boundaries are unit-tested (automation/test_cache.py) instead of duplicated in
+          # PowerShell. It reads the locked dependencies + settings from the checkout,
+          # fingerprints the CMake flag inputs (byte-identical to the legacy computation),
+          # and prints name=value lines that become this step's outputs.
+          $KeyLines = @(python automation/cache_keys.py --repo-root . --msvc $MsvcVersion --os $env:RUNNER_OS --arch $env:RUNNER_ARCH)
+          if ($LASTEXITCODE -ne 0) { throw "cache_keys.py failed" }
+          Set-Content -LiteralPath $env:GITHUB_OUTPUT -Value $KeyLines
+          New-Item -ItemType Directory -Force -Path build | Out-Null
+          Set-Content -LiteralPath "build/cache-keys.txt" -Value $KeyLines
+          $Val = { param($n) $l = ($KeyLines | Where-Object { $_ -like "$n=*" } | Select-Object -First 1); if ($l) { $l.Split('=', 2)[1] } }
+          Write-Host "MSVC toolset      : $MsvcVersion"
+          Write-Host "flag fingerprint  : $( & $Val 'flag_hash')"
+          Write-Host "dependency hash   : $( & $Val 'dep_hash')"
+          Write-Host "sccache key       : $( & $Val 'sccache_key')"
+          Write-Host "restore prefix    : $( & $Val 'sccache_restore1')"
+          Write-Host "vcpkg checkout key: $( & $Val 'vcpkgsrc_key')"
+          Write-Host "vcpkg binary key  : $( & $Val 'vcpkgbin_key')"
+          Write-Host "ffmpeg key        : $( & $Val 'ffmpeg_key')"
       - name: Restore compiler caches
         id: compiler-caches
         uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
@@ -97,10 +100,27 @@ jobs:
             D:\ninfer-cache\sccache-cpp
             D:\ninfer-cache\sccache-cuda
           key: ${{ steps.cache-keys.outputs.sccache_key }}
+          # The primary restore prefix is the compatibility boundary (schema, os, arch, MSVC,
+          # CUDA, sm_120a, flag fingerprint). A source or FFmpeg change moves only the
+          # snapshot identity after the prefix, so the latest compatible snapshot restores
+          # and sccache content addressing decides which objects hit. restore2 is one
+          # explicit, fully bounded migration prefix for this server-only automation change.
           restore-keys: |
             ${{ steps.cache-keys.outputs.sccache_restore1 }}
             ${{ steps.cache-keys.outputs.sccache_restore2 }}
-            ${{ steps.cache-keys.outputs.sccache_restore3 }}
+      - name: Record restored compiler-cache size
+        shell: pwsh
+        run: |
+          $Bytes = [int64]0
+          foreach ($Dir in @("D:\ninfer-cache\sccache-cpp","D:\ninfer-cache\sccache-cuda")) {
+              if (Test-Path $Dir) {
+                  $Sum = (Get-ChildItem -Path $Dir -Recurse -File -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum
+                  if ($null -ne $Sum) { $Bytes += [int64]$Sum }
+              }
+          }
+          New-Item -ItemType Directory -Force -Path build | Out-Null
+          Set-Content -LiteralPath "build/restored-sccache-bytes.txt" -Value "$Bytes"
+          Write-Host "restored compiler cache: $Bytes bytes before build"
       - name: Restore vcpkg checkout
         id: vcpkg-checkout
         uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
@@ -137,7 +157,7 @@ jobs:
         env:
           NINFER_CACHE_ROOT: D:\ninfer-cache
           NINFER_SCCACHE: D:\ninfer-cache\sccache-bin\sccache.exe
-          NINFER_SCCACHE_CUDA: ${{ inputs.cuda_cache && 'on' || 'off' }}
+          NINFER_SCCACHE_CUDA: ${{ inputs.cuda_cache == 'true' && 'on' || 'off' }}
         run: ./automation/build.ps1
       - name: Report cache metrics
         if: always()
@@ -150,6 +170,32 @@ jobs:
         run: |
           $Lines = New-Object System.Collections.Generic.List[string]
           $Lines.Add("## NInfer cache verification run")
+          $KeyLines = @()
+          if (Test-Path "build/cache-keys.txt") { $KeyLines = @(Get-Content -LiteralPath "build/cache-keys.txt" -ErrorAction SilentlyContinue) }
+          $Val = { param($n) $l = ($KeyLines | Where-Object { $_ -like "$n=*" } | Select-Object -First 1); if ($l) { $l.Split('=', 2)[1] } }
+          $CompilerHit = [string]$env:COMPILER_CACHE_HIT
+          $RestoredBytes = 0
+          if (Test-Path "build/restored-sccache-bytes.txt") {
+              $rb = (Get-Content -LiteralPath "build/restored-sccache-bytes.txt" -ErrorAction SilentlyContinue | Select-Object -First 1)
+              if ($rb -match '^\d+$') { $RestoredBytes = [int64]$rb }
+          }
+          $RestoreMode = if ($CompilerHit -eq 'true') { 'exact hit' } elseif ($RestoredBytes -gt 0) { "prefix fallback ($([math]::Round($RestoredBytes/1MB,1)) MiB restored)" } else { 'cold miss' }
+          $Lines.Add("| field | value |")
+          $Lines.Add("| --- | --- |")
+          $Lines.Add("| workflow branch | $(${env:GITHUB_REF}) |")
+          $Lines.Add("| restore mode | $RestoreMode |")
+          $Lines.Add("| exact key | $( & $Val 'sccache_key') |")
+          $Lines.Add("| restore prefix | $( & $Val 'sccache_restore1') |")
+          $Lines.Add("| snapshot identity | $( & $Val 'sccache_identity') |")
+          $Lines.Add("| cache schema | $( & $Val 'schema') |")
+          $Lines.Add("| MSVC toolset | $( & $Val 'msvc_version') |")
+          $Lines.Add("| CUDA version | $( & $Val 'cuda_version') (sm_120a) |")
+          $Lines.Add("| sccache version | $( & $Val 'sccache_version') |")
+          $Lines.Add("| flag fingerprint | $( & $Val 'flag_hash') |")
+          $Lines.Add("| dependency fingerprint | $( & $Val 'dep_hash') |")
+          $Lines.Add("| FFmpeg SHA256 | $( & $Val 'ffmpeg_sha256') |")
+          $Lines.Add("| vcpkg revision | $( & $Val 'vcpkg_sha') |")
+          $Lines.Add("| cuda_cache routing | $(if ($env:NINFER_SCCACHE_CUDA -eq 'on') { 'sccache' } else { 'nvcc (bypass)' }) |")
           $Metrics = $null
           if (Test-Path "build/cache-metrics.json") { $Metrics = Get-Content -LiteralPath "build/cache-metrics.json" -Raw | ConvertFrom-Json }
           if ($null -ne $Metrics) {
@@ -198,3 +244,19 @@ jobs:
         with:
           path: D:\ninfer-cache\ffmpeg
           key: ${{ steps.cache-keys.outputs.ffmpeg_key }}
+      - name: Rotate compiler-cache snapshots
+        # Bounded retention: keep the newest 3 compatible sccache snapshots, delete older
+        # ones under our prefix only. Guarded and non-fatal so a cache-API problem never
+        # fails the verification run. Skipped on corrupt_cache runs (R6) which must not
+        # touch retention.
+        if: success() && inputs.corrupt_cache != 'true'
+        continue-on-error: true
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $Restore1 = (Get-Content -LiteralPath "build/cache-keys.txt" -ErrorAction SilentlyContinue | Where-Object { $_ -like 'sccache_restore1=*' } | Select-Object -First 1)
+          if (-not $Restore1) { Write-Host "retention> no restore prefix recorded; skipping"; exit 0 }
+          $Prefix = $Restore1.Split('=', 2)[1]
+          python automation/retention.py --repo "$env:GITHUB_REPOSITORY" --prefix $Prefix --keep 3 --out build/cache-retention.json

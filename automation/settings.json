@@ -13,6 +13,9 @@
   "model_artifact_variable": "NINFER_TEST_ARTIFACT",
   "build_cache": {
     "schema": 2,
+    "compatible_flag_hashes": [
+      "20d1a528e14db04c"
+    ],
     "sccache": {
       "version": "0.18.0",
       "url": "https://github.com/mozilla/sccache/releases/download/v0.18.0/sccache-v0.18.0-x86_64-pc-windows-msvc.zip",

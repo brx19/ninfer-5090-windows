@@ -1,0 +1,45 @@
+# Daily dependency refresh — independent cadence from the 6-hour source sync.
+#
+# Calls the same build/release pipeline (brx-sync-build.yml) in dependency-refresh
+# mode: it re-resolves the pinned dependencies (FFmpeg + vcpkg) and creates a build
+# candidate only when a real dependency update is available. The NInfer source stays
+# at the already-locked headpiece snapshot, so a dependency-only run never rebuilds
+# for a source change and a source run never rebuilds for a dependency change.
+#
+# The shared concurrency group (brx-update-pipeline) prevents a source run and a
+# dependency run from building at the same time; a no-change run is cheap (it only
+# resolves dependencies and exits without publishing).
+name: BRX dependency refresh
+
+on:
+  # Daily, staggered from the 6h source-sync schedule (17 */6) to avoid overlapping
+  # dependency resolution and builds.
+  schedule:
+    - cron: '23 4 * * *'
+  workflow_dispatch:
+    inputs:
+      force_build:
+        type: boolean
+        default: false
+        description: Force a dependency-refresh build even if pins did not change
+
+permissions:
+  contents: read
+
+concurrency:
+  group: brx-update-pipeline
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    if: github.repository == 'brx19/ninfer-5090-windows'
+    permissions:
+      contents: write
+    uses: ./.github/workflows/brx-sync-build.yml
+    with:
+      mode: dependencies
+      force_build: ${{ inputs.force_build }}
+      # Keep CUDA compiler caching off by default on the dependency-refresh path,
+      # matching the release pipeline default.
+      cuda_cache: false
+    secrets: inherit
