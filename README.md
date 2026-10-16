@@ -120,20 +120,26 @@ Two build notes specific to Windows:
 
 ### Profiles and launchers
 
-Four launchers ship for the RTX 5090, one per measured-optimal profile. Every number below was
-measured on this machine with the exact argument set the launcher uses, in one interleaved pass --
-absolute decode varies by up to ~9% between sessions on a card whose clocks are not pinned, so
-compare lanes to each other and expect your own absolute figures to differ. Both artifacts are
-vision-only here because Vision measured free on both at 262,144; the with/without comparison is
-recorded in [ADR-0004](docs/adr/0004-vision-only-and-third-party-artifact.md). No degraded text-only variant ships, and every profile reaches the
-full native context.
+Eight launchers ship for the RTX 5090 -- the four measured-optimal artifacts, each in both
+its DFlash2 and MTP routes (eight profiles total). Every number below was measured on this machine
+with the exact argument set the launcher uses, in one interleaved pass -- absolute decode varies by
+up to ~9% between sessions on a card whose clocks are not pinned, so compare lanes to each other
+and expect your own absolute figures to differ. Both artifacts are vision-only here because Vision
+measured free on both at 262,144; the with/without comparison is recorded in
+[ADR-0004](docs/adr/0004-vision-only-and-third-party-artifact.md). No degraded text-only variant
+ships, and every profile reaches the full native context. **Three lanes ship `--kv-dtype k8v4`**
+(QUASAR DFlash2, Swift15 MTP, NVFP4-nvidia MTP); the rest ship `fp8`.
 
 | Launcher | Artifact | Spec | Vision | Context | Decode | Acceptance |
 | --- | --- | --- | --- | --- | --- | --- |
-| `start_quasar_v3_dflash2_vision.bat` | QUASAR | DFlash2 (7) | yes | 262,144 | **343 tok/s** | 62.5% |
-| `start_quasar_v3_mtp4_vision.bat` | QUASAR | MTP (4) | yes | 262,144 | 220 tok/s | 58.3% |
-| `start_ninfer_v3_dflash2_vision.bat` | NVFP4-full | DFlash2 (7) | yes | 262,144 | **345 tok/s** | 63.7% |
-| `start_ninfer_v3_mtp5_vision.bat` | NVFP4-full | MTP (5) | yes | 262,144 | 254 tok/s | 64.2% |
+| `start_quasar_v3_dflash2_vision.bat` | QUASAR | DFlash2 (7) | yes | 262,144 | **305 tok/s** | 54.8% |
+| `start_quasar_v3_mtp4_vision.bat` | QUASAR | MTP (4) | yes | 262,144 | 210 tok/s | 59.7% |
+| `start_ninfer_v3_dflash2_vision.bat` | NVFP4-full | DFlash2 (9) | yes | 262,144 | **366 tok/s** | 51.7% |
+| `start_ninfer_v3_mtp4_vision.bat` | NVFP4-full | MTP (4) | yes | 262,144 | 213 tok/s | 56.1% |
+| `start_swift_v3_dflash2_vision.bat` | Swift15 | DFlash2 (7) | yes | 262,144 | **319 tok/s** | 50.9% |
+| `start_swift_v3_mtp4_vision.bat` | Swift15 | MTP (5) | yes | 262,144 | 216 tok/s | 58.0% |
+| `start_nvidia_v3_dflash2_vision.bat` | NVFP4-nvidia | DFlash2 (9) | yes | 262,144 | **314 tok/s** | 44.9% |
+| `start_nvidia_v3_mtp4_vision.bat` | NVFP4-nvidia | MTP (4) | yes | 262,144 | 173 tok/s | 47.7% |
 
 Context ceilings are measured, not assumed. The engine refuses a profile whose minimum Engine
 runtime reservation plus its 1 GiB automatic headroom does not fit in what remains after
