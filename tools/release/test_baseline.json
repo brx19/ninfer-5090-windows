@@ -1,6 +1,6 @@
 {
   "recorded": "2026-10-15",
-  "suite_size": 191,
+  "suite_size": 192,
   "known_failures": {
     "ninfer_qwen3_5_dflash_real_test": {
       "case": "dflash real route",
@@ -82,6 +82,11 @@
       "date": "2026-10-15",
       "count": 8,
       "note": "test binaries now use binary stdout mode; suite size 183->191"
+    },
+    {
+      "date": "2026-10-15",
+      "count": 1,
+      "note": "ninfer_artifact_direct_io_test: regression test for issue #7 (Windows Direct I/O regression from merge 8777393d). Reads NINFER_TEST_ARTIFACT through the materializer's 64 MiB direct pattern; on Windows it locks the 4096-alignment contract (the pre-fix CRT path reported 1/1) plus a 3.5 GiB/s floor measured 2026-10-15 on the release machine (pre-fix 2.51-2.58 GiB/s, post-fix 5.48-5.60 GiB/s on 17.65 GiB artifacts). Skips 77 without an artifact or under 4 GiB."
     }
   ]
 }

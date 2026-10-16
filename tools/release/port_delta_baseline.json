@@ -1,6 +1,6 @@
 {
   "against": "upstream/dev",
-  "recorded": "2026-10-13",
+  "recorded": "2026-10-15",
   "note": "Every upstream-owned path the port diverges from, and why. Filed by review. check_port_delta.py --check fails when a path is added here without a commit recording it, and equally when an entry no longer diverges -- a stale entry is worse than none, because it hides the next real change under an expected one.",
   "paths": {
     ".codex/hooks.json": {
@@ -52,12 +52,6 @@
       "reason": "This port's product document. The b9114396 merge took upstream's skeleton for the top-level sections and kept the port's content only inside `## Performance` and `## Windows`; the port's head block, `## Install a release (recommended)`, `## Client compatibility and known API limitations` and `## OpenCode Desktop integration` were restored 2026-10-06 from c42406ab, and upstream's `## Quick start` (a Linux clone this tree cannot follow), `## Evaluation` (its scores over checkpoints this port does not ship), `## Docker` and `## Support` are dropped -- which is what 31ab6dfe did and the merge undid. Two facts were corrected in place rather than copied: constrained decoding exists (upstream eb6696ae) and the engine preempts under resource pressure."
     },
     "apps/CMakeLists.txt": {
-      "status": "M",
-      "disposition": "windows",
-      "review": "product",
-      "reason": "Part of the drafter-recall instrument: the CLI prints recall@1 and recall@16 by position from the vectors decode.cpp accumulates, and the per-position denominators are what make the two rates readable."
-    },
-    "apps/cli/main.cpp": {
       "status": "M",
       "disposition": "windows",
       "review": "product",
@@ -171,11 +165,11 @@
       "review": "product",
       "reason": "One name table: the bench's own kv_cache_name was one of five copies and it calls ninfer::kv_storage_name() now. tests/test_ninfer_bench_support.cpp pins the values it prints."
     },
-    "bench/inference/ninfer_bench_support.cpp": {
+    "bench/inference/ninfer_bench_support.h": {
       "status": "M",
       "disposition": "unknown",
-      "review": "product",
-      "reason": "Reports the per-position recall split in both the JSON and the CSV, with proposed_per_position as the denominator for recall@1, recall@16 and path acceptance. The bench table is read by header name and never by column position."
+      "review": "a native-Windows port fix, not independently reviewed; evidence is the build in build-test and the affected tests. Upstream's code is Linux/GCC-shaped here and does not compile or link under MSVC 14.51 as written. The report prints that name, so it cannot be restated locally.",
+      "reason": "Includes the port's own ninfer/kv_storage.h for kv_storage_name and parse_kv_storage. Upstream carries a local kv_cache_name in the .cpp instead and has no such header; the port's table is the engine's own spelling and is what per_domain_kl.py compares."
     },
     "bench/models/qwen3_5/benchmarks.cmake": {
       "status": "M",
@@ -209,7 +203,7 @@
     },
     "docs/maintainer/build-system.md": {
       "status": "M",
-      "disposition": "windows",
+      "disposition": "unknown",
       "review": "windows",
       "reason": "Cited in the diff -- port: this port. Open it before changing this path."
     },
@@ -326,12 +320,6 @@
       "disposition": "windows",
       "review": "windows",
       "reason": "Cited in the diff -- measure: measured. Open it before changing this path."
-    },
-    "include/ninfer/engine.h": {
-      "status": "M",
-      "disposition": "windows",
-      "review": "windows",
-      "reason": "Engine::score_topk and the CausalTopk result, the public surface of the port's top-k instrument."
     },
     "include/ninfer/ops/candidate_selector.h": {
       "status": "M",
@@ -507,18 +495,6 @@
       "review": "deleted",
       "reason": "Removed by the port. Upstream owns this file and the port does not ship it -- check whether anything still references it before restoring it from upstream."
     },
-    "src/artifact/file_io.cpp": {
-      "status": "M",
-      "disposition": "windows",
-      "review": "windows",
-      "reason": "Cited in the diff -- win32: _WIN32. Open it before changing this path."
-    },
-    "src/artifact/file_io.h": {
-      "status": "M",
-      "disposition": "windows",
-      "review": "windows",
-      "reason": "Cited in the diff -- win32: _WIN32. Open it before changing this path."
-    },
     "src/artifact/reader.cpp": {
       "status": "M",
       "disposition": "unknown",
@@ -555,17 +531,23 @@
       "review": "Windows portability, not independently reviewed; evidence is the build in both trees, the affected tests and the gate chain. Verified by the three CPU tests where it touches the executor, and by the ASan subset where it touches host lifetime",
       "reason": "Windows necessity: adds <string> for std::to_string, which libstdc++ provides transitively through another header and MSVC does not (C2039). Same class as the <span> include the previous merge added to generation_service.h."
     },
+    "src/core/io/file.cpp": {
+      "status": "M",
+      "disposition": "windows",
+      "review": "",
+      "reason": ""
+    },
+    "src/core/io/read_queue.cpp": {
+      "status": "M",
+      "disposition": "windows",
+      "review": "",
+      "reason": ""
+    },
     "src/core/paged_kv_cache.h": {
       "status": "M",
       "disposition": "product",
       "review": "product",
       "reason": "Documents the plane order as a contract: kv_cache_append and causal_softmax_attention walk these planes positionally, and which planes exist is a property of the resolved storage layout rather than of the Op."
-    },
-    "src/core/paged_kv_storage.h": {
-      "status": "M",
-      "disposition": "unknown",
-      "review": "product",
-      "reason": "Port change: the device tree reached ninfer/types.h through this header for exactly one name, KvCacheStorage, and types.h carries the whole product's public surface. It includes ninfer/kv_types.h now. Measured in build-test on 2026-10-11 by touching types.h and dry-running the build: 314 objects rebuilt before (298 host, 16 CUDA), 176 after (176 host, 0 CUDA)."
     },
     "src/core/weight_view.cpp": {
       "status": "M",
@@ -609,18 +591,6 @@
       "review": "product",
       "reason": "Part of making the DFlash2 selector's codebooks real weights: they are declared as parameters with the drafter's vocab x selector_rank shape, bound as LinearParameters, and passed to candidate_selector_path as Weight rather than as a raw pointer. That is what lets the codebooks be NVFP4 as well as BF16, which is the route upstream's Q8-only drafter projection cannot serve."
     },
-    "src/models/qwen3_5/execution/text.cpp": {
-      "status": "M",
-      "disposition": "unknown",
-      "review": "product",
-      "reason": "The constructor half of the TextCallConfig restore: the slot validation moves here from set_linear_state_slots, which is removed together with set_sampling and set_mtp_proposal_extent."
-    },
-    "src/models/qwen3_5/execution/text.h": {
-      "status": "M",
-      "disposition": "unknown",
-      "review": "product",
-      "reason": "TextCallConfig, restored 2026-10-06 after item 16 found the b9114396 merge had taken the port's version of df2004da. The per-call inputs -- sampling, the Linear Attention state slots and the MTP proposal extent -- arrive at construction, so the sequence is unrepresentable rather than conventional, and the slot validation that lived in one setter moves into the constructor where it cannot be skipped. set_gdn_state_action stays a setter and says why in place: target verification switches it on a card it was handed, after construction."
-    },
     "src/models/qwen3_5/frontend/chat_template.cpp": {
       "status": "M",
       "disposition": "unknown",
@@ -657,12 +627,6 @@
       "review": "product",
       "reason": "Cited in the diff -- ADR: 0010. Open it before changing this path."
     },
-    "src/models/qwen3_5/frontend/tool_call_parser.cpp": {
-      "status": "M",
-      "disposition": "unknown",
-      "review": "product",
-      "reason": "Fallback diagnostics now name the subject they rejected. Its comment states the contract: 'undeclared tool' with no subject cannot distinguish a model that misspelled a declared name from one that invented a tool, and those need opposite responses. Covered by tests/test_tool_call_parser.cpp."
-    },
     "src/models/qwen3_5/load.cpp": {
       "status": "M",
       "disposition": "unknown",
@@ -681,59 +645,17 @@
       "review": "product",
       "reason": "The config parser takes artifact::Reader instead of artifact::Directory, so it can reach the artifact's metadata: load.cpp populates EngineInfo::name and metadata_json from reader.metadata(), which Directory does not expose. Both types exist on both sides -- this is a widening for the metadata, not a rename."
     },
-    "src/models/qwen3_5/program/decode.cpp": {
-      "status": "M",
-      "disposition": "unknown",
-      "review": "product",
-      "reason": "The drafter-recall instrument: accumulates proposed_per_position, recall1_per_position and recall16_per_position beside the DFlash round. The fields are documented in include/ninfer/types.h, printed by apps/cli/main.cpp, and published as metrics by src/serve/generation_service.*. Added by 611604e0; no Op signature and no numerics change."
-    },
     "src/models/qwen3_5/program/execution_context.h": {
       "status": "M",
       "disposition": "unknown",
       "review": "product",
       "reason": "configure_text_card's declaration follows TextCallConfig: the sampling, state slots and proposal extent arrive at construction now, so it takes the card and the execution core only."
     },
-    "src/models/qwen3_5/program/planning/startup.cpp": {
-      "status": "M",
-      "disposition": "unknown",
-      "review": "product",
-      "reason": "The per-layer KV plane geometry is built once by storage_planes(layer_storage, kv_heads) and repeated per layer, instead of the four push_back calls being written out per layer. A deduplication of the same class as ops/common/validation.h and the route catalog, and the same gate protects it."
-    },
     "src/models/qwen3_5/program/prefill.cpp": {
       "status": "M",
       "disposition": "unknown",
       "review": "product",
       "reason": "The definition and both call sites of configure_text_card for the TextCallConfig restore: the three setters move to the TextContext constructor and the call sites pass TextCallConfig."
-    },
-    "src/models/qwen3_5/program/program.cpp": {
-      "status": "M",
-      "disposition": "unknown",
-      "review": "product",
-      "reason": "Cited in the diff -- port: the port's. Open it before changing this path."
-    },
-    "src/models/qwen3_5/program/program.h": {
-      "status": "M",
-      "disposition": "unknown",
-      "review": "product",
-      "reason": "Declares Program::causal_score_topk, the public route to the top-k instrument above."
-    },
-    "src/models/qwen3_5/program/program_impl.cpp": {
-      "status": "M",
-      "disposition": "windows",
-      "review": "windows",
-      "reason": "ProgramImpl::causal_score_topk, the port's per-domain KL instrument. Its own comment records that upstream b9114396 has no top-k scoring at all, and that the reference it compares against cannot be resident on this machine. causal_score forwards to it with topk == 0, so the two share one staging loop and cannot disagree about which positions were scored."
-    },
-    "src/models/qwen3_5/program/program_impl.h": {
-      "status": "M",
-      "disposition": "unknown",
-      "review": "product",
-      "reason": "The top-k instrument's host landing buffer and its declaration: causal_score_topk with score_topk_host sized for a full tile at the Op's documented maximum K (2 MiB), planned for the maximum rather than for the k a caller asks for, because k is a runtime choice here."
-    },
-    "src/models/qwen3_5/program/speculative/mtp.cpp": {
-      "status": "M",
-      "disposition": "unknown",
-      "review": "product",
-      "reason": "The third configure_text_card call site, in the MTP bridge, for the TextCallConfig restore."
     },
     "src/models/qwen3_5/program/storage/kv_address_space.h": {
       "status": "M",
@@ -999,6 +921,36 @@
       "review": "a schedule rename, not independently reviewed; evidence is the build in both trees, the affected tests and the gate chain",
       "reason": "Port feature: follows the port's rename of Fp8A8TmaSplitKSchedule to Fp8A8SplitKSchedule: its Base is any FP8 A8 schedule, not a TMA one, and item 12 needed the MMA transport to wrap the same geometry to twin the split-K tiles. The name is now wrong rather than merely stale, so upstream's callers were migrated with it."
     },
+    "src/ops/moe/kernels/cpu/groupwise_int/avx2.cpp": {
+      "status": "M",
+      "disposition": "unknown",
+      "review": "",
+      "reason": ""
+    },
+    "src/ops/moe/kernels/cpu/groupwise_int/avx512.h": {
+      "status": "M",
+      "disposition": "unknown",
+      "review": "",
+      "reason": ""
+    },
+    "src/ops/moe/kernels/cpu/nvfp4/compute.h": {
+      "status": "M",
+      "disposition": "windows",
+      "review": "",
+      "reason": ""
+    },
+    "src/ops/moe/routed_swiglu/cpu/nvfp4/shapes/h2560_i640_e512_k10/dispatch.cpp": {
+      "status": "M",
+      "disposition": "windows",
+      "review": "",
+      "reason": ""
+    },
+    "src/ops/moe/routed_swiglu/cpu/sources.cmake": {
+      "status": "M",
+      "disposition": "windows",
+      "review": "a native-Windows port fix, not independently reviewed; evidence is the build in build-test, the MoE CPU tests and the runtime CPUID dispatch in dispatch.cpp. Performance on this card is unmeasured.",
+      "reason": "Applies the per-variant ISA split with /arch:AVX2 and /arch:AVX512 under MSVC, and keeps upstream's -m flags for the GCC/Clang build. Measured: cl.exe accepts -mavx2/-mavx512f without a word, where an option it does not know is reported (D9002 for /arch:AVX512FP16), so upstream's flags alone leave the AVX2 and AVX-512 objects on MSVC's default codegen. Safe to compile per variant because select_isa() only reaches a variant after a CPUID check reports its features. NOT MEASURED for performance: this makes upstream's intent take effect, and the throughput effect on this card is unmeasured."
+    },
     "src/ops/reduction/sources.cmake": {
       "status": "M",
       "disposition": "unknown",
@@ -1119,12 +1071,6 @@
       "review": "windows",
       "reason": "Cited in the diff -- msvc: MSVC. Open it before changing this path."
     },
-    "src/runtime/engine/causal_score_core.h": {
-      "status": "M",
-      "disposition": "unknown",
-      "review": "product",
-      "reason": "The top-k job plumbing for Engine::score_topk: a promise/future per request, so an offline evaluator can hold several tiles in flight. Feeds include/ninfer/engine.h's score_topk."
-    },
     "src/runtime/engine/context_cache/context_cost.cpp": {
       "status": "M",
       "disposition": "windows",
@@ -1136,18 +1082,6 @@
       "disposition": "windows",
       "review": "windows",
       "reason": "Windows necessity: MSVC has no __int128, so core/uint128.h provides the type -- a real 128-bit builtin under GCC and a two-word struct with the needed operators under MSVC. Here it replaces upstream's cast in a comparison whose product overflows 64 bits. Pinned by the port-delta baseline and protected by src/core/uint128.h's own tests. Second (2026-10-12): release_unreferenced returned by throwing when Native refused to release an unreferenced checkpoint, and its callers are noexcept engine paths, so a pinned checkpoint released through one terminated the process -- no report, no stack, and the catch-all cleanup that errors out the other in-flight requests never ran. It now returns instead. Deferring the release the way reclaim does was rejected: prune does not retry release_unreferenced, so a deferred release would never be completed and the checkpoint would leak. Found by the c-review detect pass."
-    },
-    "src/runtime/engine/engine.cpp": {
-      "status": "M",
-      "disposition": "product",
-      "review": "product",
-      "reason": "Engine::score_topk, the public entry point for the top-k instrument, dispatched to the resident core's program."
-    },
-    "src/runtime/engine/engine_core.h": {
-      "status": "M",
-      "disposition": "unknown",
-      "review": "product",
-      "reason": "Two port changes, both restored 2026-10-06 after item 16 found the b9114396 merge had taken them. First, the other half of the kv_capacity.h deduplication: that header is still present and still included by model_instance.h and causal_score_core.h, but its caller in memory_summary() had been reverted to the inline publication it replaced, so the dedup was half-applied. Second, a settle-order fix: 'Free the slot and publish the post-release snapshot before waking the caller, so a runtime_stats() read after generate() returns reflects the released lane instead of the last decode boundary.' It has three coupled parts, and the third is what makes it safe -- cancel_active_requests held const auto& request = slots_[lane] and remove_completed_slot resets that slot, so reordering without taking a copy is a use-after-free. Restored at the two sites the port's change covered, with the deferred publish removed. Verified by the full suite and the baseline gate. Third (2026-10-12): the materializing_ optional is copied rather than moved. The cleanup reads exactly that optional to complete the request, so a moved-from shared_ptr left it engaged holding null, and a throw between the move and the reset completed nothing -- the request had already been erased from pending_ and reaches slots_ only later, so its consumer waited on a condition variable that could never fire. The optional is reset on every path below, so the move bought nothing. Found by the c-review detect pass."
     },
     "src/runtime/engine/kv_capacity.h": {
       "status": "M",
@@ -1209,12 +1143,6 @@
       "review": "product",
       "reason": "Media URL validation using product::media_acquire::classify_wire_source, so every wire endpoint rejects a part that is neither HTTP(S) nor a data URI with a named error rather than passing it downstream. Same rule as src/product/media_acquire/source.h."
     },
-    "src/serve/operational_log.cpp": {
-      "status": "M",
-      "disposition": "unknown",
-      "review": "product",
-      "reason": "Reports the prepare phase for every request, media or not, because preparation is host-side prompt work regardless: building the tool-call contract, converting the messages, rendering the chat template and tokenizing the whole prompt. The phase field is what tools/bench/report_serve_phases.py reads, and its definition is recorded in AGENTS.md (prepare_seconds spans the whole frontend, not just the render)."
-    },
     "src/serve/operational_log.h": {
       "status": "M",
       "disposition": "unknown",
@@ -1250,12 +1178,6 @@
       "disposition": "unknown",
       "review": "product",
       "reason": "Port change: Schema::check recursed once per nesting level with a measured 1808-byte frame and a schema's nesting is the request's to choose, so a ~21 KB body at depth 570 killed the serving process with STATUS_STACK_OVERFLOW -- measured on this tree's own Release objects, with a flat 155 KB schema and depth 3000 through the protocol route both passing, which is what attributes the failing frame to this walk rather than to nlohmann. Bounded at 64 levels using the JSON pointer the walker already carries, whose separator count is exactly the depth because child() escapes '/' as '~1'. Found and measured by the c-review detect pass."
-    },
-    "tests/CMakeLists.txt": {
-      "status": "M",
-      "disposition": "unknown",
-      "review": "product",
-      "reason": "Test coverage for a port feature or fix. The port's rule is that advertised surface lands with its evidence, and these are the binaries that would catch a merge silently taking upstream's version of the code they cover."
     },
     "tests/README.md": {
       "status": "M",
@@ -1341,6 +1263,12 @@
       "review": "Windows portability, not independently reviewed; evidence is the build in both trees, the affected tests and the gate chain. Verified by the three CPU tests where it touches the executor, and by the ASan subset where it touches host lifetime",
       "reason": "Windows necessity: sched_getcpu() has no MSVC equivalent; current_processor() reads GetCurrentProcessorNumberEx and flattens (group, index) the same way core/cpu/system.h numbers CpuAffinity, so the assertion that each worker runs on its planned CPU still compares like with like."
     },
+    "tests/expert_cache_cuda_errors.cpp": {
+      "status": "M",
+      "disposition": "windows",
+      "review": "a native-Windows port fix, not independently reviewed; evidence is the build in build-test and the affected tests. Upstream's code is Linux/GCC-shaped here and does not compile or link under MSVC 14.51 as written. The injected-failure cases are therefore not exercised on this platform.",
+      "reason": "Guards the __real_/__wrap_ definitions and the injected-failure cases with _MSC_VER, reporting SKIP rather than passing silently. The wrappers need GNU ld --wrap, which MSVC does not provide, and an import-address patch cannot substitute because this build resolves cudart statically. This is the arrangement tests/artifact/materialization_cuda_errors.cpp already uses for the same class of case."
+    },
     "tests/kv_cache_storage.h": {
       "status": "D",
       "disposition": "deleted",
@@ -1365,11 +1293,11 @@
       "review": "product",
       "reason": "Port edits in an upstream test file: artifact goldens, a guarded main, and the model's default stops where a tool is declared. (1) exercise_artifact_frontend is upstream's and asserts upstream's artifacts (16 thinking / 18 no-thinking); this port's artifacts measure 58/18, because their embedded template emits the reasoning-effort instruction as a synthetic system message -- exactly the 40-token delta -- and upstream's predates it. Upstream's 16 also returned early, hiding every other scenario in this file. The port asserts its own goldens and names the actual count on failure; change these only against a fresh measurement, and prefer the shipping path (`ninfer --messages` reports prompt tokens directly). (2) main() guards the scenario dispatch and reports the failing scenario and its reason, because an uncaught throw reached std::terminate and exited 0xC0000409 with no message -- which reads as a crash in the code under test, and did, for one session. (3) Six scenarios keep the model's default EOS stops where they declare a tool. Upstream 41e50d0d made a tool-declaring request take a constrained contract, and src/models/qwen3_5/frontend/frontend.cpp:915 rejects include_model_defaults=false for it; that commit did not update its own scenarios. Measured 2026-10-07 over all 13 scenarios: those six failed with 'constraints require default EOS, text output, no custom stops, and one output language', while shared-rewrite-materialization also declares tools and passed because it never disabled them. No assertion changed."
     },
-    "tests/models/qwen3_5/test_frontend.cpp": {
+    "tests/models/qwen3_5/test_loading_real.cpp": {
       "status": "M",
       "disposition": "windows",
-      "review": "windows",
-      "reason": "Cited in the diff -- ADR: 0010. Open it before changing this path."
+      "review": "a native-Windows port fix, not independently reviewed; evidence is the build in build-test and the affected tests. Upstream's code is Linux/GCC-shaped here and does not compile or link under MSVC 14.51 as written. Nothing parses this line; it is printed for a human reading the test output.",
+      "reason": "peak_rss_kib() reads PeakWorkingSetSize through GetProcessMemoryInfo on Windows and getrusage elsewhere, so the diagnostic line keeps its field and unit on both. sys/resource.h has no MSVC equivalent and is now included only off _WIN32."
     },
     "tests/models/qwen3_5/test_tool_schema.py": {
       "status": "M",
@@ -1382,6 +1310,30 @@
       "disposition": "windows",
       "review": "windows",
       "reason": "Cited in the diff -- port: the port's. Open it before changing this path."
+    },
+    "tests/models/qwen4_exp/ple/disk/test_prepare.py": {
+      "status": "M",
+      "disposition": "unknown",
+      "review": "",
+      "reason": ""
+    },
+    "tests/models/qwen4_exp/ple/disk/test_table.cpp": {
+      "status": "M",
+      "disposition": "windows",
+      "review": "",
+      "reason": ""
+    },
+    "tests/models/qwen4_exp/ple/disk/test_table.py": {
+      "status": "M",
+      "disposition": "unknown",
+      "review": "",
+      "reason": ""
+    },
+    "tests/models/qwen4_exp/tests.cmake": {
+      "status": "M",
+      "disposition": "windows",
+      "review": "",
+      "reason": ""
     },
     "tests/ops/linear/test_nvfp4_a16.cpp": {
       "status": "M",
@@ -1503,6 +1455,12 @@
       "review": "product",
       "reason": "Test coverage for a port feature or fix. The port's rule is that advertised surface lands with its evidence, and these are the binaries that would catch a merge silently taking upstream's version of the code they cover."
     },
+    "tests/test_expert_cache.cu": {
+      "status": "M",
+      "disposition": "unknown",
+      "review": "an upstream missing include, not independently reviewed; evidence is the build in build-test and the expert-cache test. No behaviour change.",
+      "reason": "Adds <algorithm> for std::any_of."
+    },
     "tests/test_gdn_replay_records.cpp": {
       "status": "M",
       "disposition": "windows",
@@ -1527,11 +1485,17 @@
       "review": "product",
       "reason": "Test coverage for a port feature or fix. The port's rule is that advertised surface lands with its evidence, and these are the binaries that would catch a merge silently taking upstream's version of the code they cover."
     },
-    "tests/test_ninfer_bench_support.cpp": {
+    "tests/test_nf4.cpp": {
       "status": "M",
       "disposition": "windows",
-      "review": "windows",
-      "reason": "The recall split's contract test: every position gets a different denominator and a different numerator, so a reader that swapped two columns or divided by the wrong base fails. Also covers upstream's concurrent-throughput and grammar cases."
+      "review": "",
+      "reason": ""
+    },
+    "tests/test_nf4_exact.py": {
+      "status": "M",
+      "disposition": "unknown",
+      "review": "",
+      "reason": ""
     },
     "tests/test_openai_schema.cpp": {
       "status": "M",
@@ -1556,12 +1520,6 @@
       "disposition": "unknown",
       "review": "product",
       "reason": "Test coverage for a port feature or fix. The port's rule is that advertised surface lands with its evidence, and these are the binaries that would catch a merge silently taking upstream's version of the code they cover."
-    },
-    "tests/test_tool_call_parser.cpp": {
-      "status": "M",
-      "disposition": "product",
-      "review": "product",
-      "reason": "The test for the fallback diagnostics above."
     },
     "tests/text/test_chat_templates.py": {
       "status": "M",
@@ -1683,6 +1641,12 @@
       "review": "windows",
       "reason": "Windows necessity in the converter's entry point: the drive letter is not the `file.py:function` separator, so a spec like C:/x.py:f is split with os.path.splitdrive before rpartition. Without it the drive letter is read as the function name."
     },
+    "tools/convert/methods.py": {
+      "status": "M",
+      "disposition": "unknown",
+      "review": "an upstream typing gap, not independently reviewed; evidence is mypy tools/release tools/convert tests, the pre-commit hook's own step, and pytest tests/convert. The two types are the ones the surrounding code already declares rather than new decisions: AuxiliaryKey and AuxiliaryValue are defined at the top of this file and are the field types of PreparedMethod.auxiliaries, and EncodedRows.weight_divisor is declared bytes | None at tools/convert/sources/logical.py:17. No runtime behaviour changes -- an empty dict literal carries no value to alter. Reverting it puts the gate red, which is why the review is 'keep' rather than 'revert to upstream'.",
+      "reason": "Two annotations on empty dict literals in import_encoded: dict[AuxiliaryKey, AuxiliaryValue] and dict[int, bytes | None]. Upstream's version of this function fails the port's mypy gate with var-annotated on both lines."
+    },
     "tools/convert/official_recipes.py": {
       "status": "M",
       "disposition": "windows",
@@ -1754,72 +1718,6 @@
       "disposition": "windows",
       "review": "windows",
       "reason": "The same Win32 branching as tools/artifact/file_io.py, for the same reason."
-    },
-    "tools/convert/methods.py": {
-      "status": "M",
-      "disposition": "unknown",
-      "review": "an upstream typing gap, not independently reviewed; evidence is mypy tools/release tools/convert tests, the pre-commit hook's own step, and pytest tests/convert. The two types are the ones the surrounding code already declares rather than new decisions: AuxiliaryKey and AuxiliaryValue are defined at the top of this file and are the field types of PreparedMethod.auxiliaries, and EncodedRows.weight_divisor is declared bytes | None at tools/convert/sources/logical.py:17. No runtime behaviour changes -- an empty dict literal carries no value to alter. Reverting it puts the gate red, which is why the review is 'keep' rather than 'revert to upstream'.",
-      "reason": "Two annotations on empty dict literals in import_encoded: dict[AuxiliaryKey, AuxiliaryValue] and dict[int, bytes | None]. Upstream's version of this function fails the port's mypy gate with var-annotated on both lines."
-    },
-    "bench/inference/ninfer_bench_support.h": {
-      "status": "M",
-      "disposition": "unknown",
-      "review": "a native-Windows port fix, not independently reviewed; evidence is the build in build-test and the affected tests. Upstream's code is Linux/GCC-shaped here and does not compile or link under MSVC 14.51 as written. The report prints that name, so it cannot be restated locally.",
-      "reason": "Includes the port's own ninfer/kv_storage.h for kv_storage_name and parse_kv_storage. Upstream carries a local kv_cache_name in the .cpp instead and has no such header; the port's table is the engine's own spelling and is what per_domain_kl.py compares."
-    },
-    "bench/ops/moe/cpu.cpp": {
-      "status": "M",
-      "disposition": "windows",
-      "review": "a native-Windows port fix, not independently reviewed; evidence is the build in build-test and the affected tests. Upstream's code is Linux/GCC-shaped here and does not compile or link under MSVC 14.51 as written. The formula is the one bench/cpu/execution_bench.cpp already uses for the same quantity, so the two benches stay comparable.",
-      "reason": "cpu_us() reads GetProcessTimes on Windows instead of clock_gettime(CLOCK_PROCESS_CPUTIME_ID), and the provenance header's compiler= column uses the MSVC toolset version because __VERSION__ is a GCC/Clang macro. Both are the same quantities: process-wide user+kernel CPU time, and which compiler produced the file."
-    },
-    "src/ops/moe/kernels/cpu/avx2.cpp": {
-      "status": "M",
-      "disposition": "windows",
-      "review": "a native-Windows port fix, not independently reviewed; evidence is the build in build-test and the affected tests. Upstream's code is Linux/GCC-shaped here and does not compile or link under MSVC 14.51 as written.",
-      "reason": "scale() converts an fp16 with F16C's _mm_cvtph_ps instead of _cvtsh_ss, which is AVX512-FP16: MSVC 14.51 does not declare it and /arch has no switch for it (measured: /arch:AVX512FP16 is rejected as an unknown option). Both spell the same IEEE binary16-to-binary32 conversion, and this target already compiles with -mf16c."
-    },
-    "src/ops/moe/kernels/cpu/avx512.h": {
-      "status": "M",
-      "disposition": "windows",
-      "review": "a native-Windows port fix, not independently reviewed; evidence is the build in build-test and the affected tests. Upstream's code is Linux/GCC-shaped here and does not compile or link under MSVC 14.51 as written.",
-      "reason": "scale() converts an fp16 with F16C's _mm_cvtph_ps instead of _cvtsh_ss, for the reason recorded in src/ops/moe/kernels/cpu/avx2.cpp. An AVX-512 CPU has F16C, so the conversion is available in these translation units."
-    },
-    "src/ops/moe/routed_swiglu/cpu/q4_q5/shapes/h2048_i512_e256_k8/dispatch.cpp": {
-      "status": "M",
-      "disposition": "unknown",
-      "review": "a native-Windows port fix, not independently reviewed; evidence is the build in build-test and the affected tests. Upstream's code is Linux/GCC-shaped here and does not compile or link under MSVC 14.51 as written.",
-      "reason": "Calls the port's ninfer::ops::common::unreachable() instead of __builtin_unreachable, a GCC/Clang builtin MSVC does not declare (C3861). Both are the same promise to the optimizer from a switch that covered every enumerator."
-    },
-    "src/ops/moe/routed_swiglu/cpu/q4_q6/shapes/h2048_i512_e256_k8/dispatch.cpp": {
-      "status": "M",
-      "disposition": "unknown",
-      "review": "a native-Windows port fix, not independently reviewed; evidence is the build in build-test and the affected tests. Upstream's code is Linux/GCC-shaped here and does not compile or link under MSVC 14.51 as written.",
-      "reason": "Calls the port's ninfer::ops::common::unreachable() instead of __builtin_unreachable, for the reason recorded in the q4_q5 dispatch of the same shape."
-    },
-    "src/ops/moe/routed_swiglu/cpu/sources.cmake": {
-      "status": "M",
-      "disposition": "windows",
-      "review": "a native-Windows port fix, not independently reviewed; evidence is the build in build-test, the MoE CPU tests and the runtime CPUID dispatch in dispatch.cpp. Performance on this card is unmeasured.",
-      "reason": "Applies the per-variant ISA split with /arch:AVX2 and /arch:AVX512 under MSVC, and keeps upstream's -m flags for the GCC/Clang build. Measured: cl.exe accepts -mavx2/-mavx512f without a word, where an option it does not know is reported (D9002 for /arch:AVX512FP16), so upstream's flags alone leave the AVX2 and AVX-512 objects on MSVC's default codegen. Safe to compile per variant because select_isa() only reaches a variant after a CPUID check reports its features. NOT MEASURED for performance: this makes upstream's intent take effect, and the throughput effect on this card is unmeasured."
-    },
-    "tests/expert_cache_cuda_errors.cpp": {
-      "status": "M",
-      "disposition": "windows",
-      "review": "a native-Windows port fix, not independently reviewed; evidence is the build in build-test and the affected tests. Upstream's code is Linux/GCC-shaped here and does not compile or link under MSVC 14.51 as written. The injected-failure cases are therefore not exercised on this platform.",
-      "reason": "Guards the __real_/__wrap_ definitions and the injected-failure cases with _MSC_VER, reporting SKIP rather than passing silently. The wrappers need GNU ld --wrap, which MSVC does not provide, and an import-address patch cannot substitute because this build resolves cudart statically. This is the arrangement tests/artifact/materialization_cuda_errors.cpp already uses for the same class of case."
-    },
-    "tests/models/qwen3_5/test_loading_real.cpp": {
-      "status": "M",
-      "disposition": "windows",
-      "review": "a native-Windows port fix, not independently reviewed; evidence is the build in build-test and the affected tests. Upstream's code is Linux/GCC-shaped here and does not compile or link under MSVC 14.51 as written. Nothing parses this line; it is printed for a human reading the test output.",
-      "reason": "peak_rss_kib() reads PeakWorkingSetSize through GetProcessMemoryInfo on Windows and getrusage elsewhere, so the diagnostic line keeps its field and unit on both. sys/resource.h has no MSVC equivalent and is now included only off _WIN32."
-    },
-    "tests/test_expert_cache.cu": {
-      "status": "M",
-      "disposition": "unknown",
-      "review": "an upstream missing include, not independently reviewed; evidence is the build in build-test and the expert-cache test. No behaviour change.",
-      "reason": "Adds <algorithm> for std::any_of."
     }
   }
 }

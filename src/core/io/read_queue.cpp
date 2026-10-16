@@ -52,11 +52,17 @@ struct DirectReadQueue::Impl {
             if (chunk == 0) break;
             int n = _read(fv.descriptor, static_cast<char*>(dst) + done, chunk);
             if (n < 0) { c.error = errno ? errno : EIO; break; }
-            if (n == 0) break;
-            done += (std::size_t)n;
+            done += static_cast<std::size_t>(n);
+            // A short read on a regular file means EOF. Stop here: with FILE_FLAG_NO_BUFFERING the
+            // next lseek would land on a non-sector-aligned offset and fail with EINVAL. The
+            // io_uring reference issues a single positioned read, so it never retries past EOF.
+            if (static_cast<std::size_t>(n) < chunk) break;
         }
         c.bytes = static_cast<std::uint32_t>(done);
-        if (c.error == 0 && done < r.bytes) c.error = ENODATA;
+        // A short read (clean EOF before r.bytes, common for the final 4096-aligned window of a
+        // non-multiple-of-4096 file) is a success: ReadCompletion documents that a successful read
+        // may be short. The io_uring reference only sets error for a negative (failed) result. The
+        // caller validates bytes against its required count.
         completed.push_back(c);
     }
 };

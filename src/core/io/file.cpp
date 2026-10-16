@@ -66,9 +66,24 @@ ReadOnlyFile::ReadOnlyFile(const std::filesystem::path& path, ReadMode mode) : p
     if (mode != ReadMode::Buffered && mode != ReadMode::Direct)
         throw std::invalid_argument("invalid file read mode");
     int fd = -1;
-    if (_wsopen_s(&fd, path.c_str(), _O_RDONLY | _O_BINARY | _O_SEQUENTIAL, _SH_DENYNO, 0) != 0)
-        fail(path, "open");
-    if (fd < 0) fail(path, "open");
+    if (mode == ReadMode::Direct) {
+        HANDLE handle = ::CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ,
+                                      nullptr, OPEN_EXISTING,
+                                      FILE_FLAG_NO_BUFFERING | FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
+        if (handle == INVALID_HANDLE_VALUE) fail(path, "open");
+        // Wrap the Win32 handle in the CRT descriptor used by the rest of this class.
+        // The underlying handle stays unbuffered: _read/_lseeki64 keep the no-cache
+        // behaviour when called through the CRT descriptor.
+        fd = _open_osfhandle(reinterpret_cast<intptr_t>(handle), _O_RDONLY | _O_BINARY);
+        if (fd < 0) {
+            ::CloseHandle(handle);
+            fail(path, "open");
+        }
+    } else {
+        if (_wsopen_s(&fd, path.c_str(), _O_RDONLY | _O_BINARY | _O_SEQUENTIAL, _SH_DENYNO, 0) != 0)
+            fail(path, "open");
+        if (fd < 0) fail(path, "open");
+    }
     view_.descriptor = fd;
     view_.mode = mode;
     try {
@@ -81,8 +96,8 @@ ReadOnlyFile::ReadOnlyFile(const std::filesystem::path& path, ReadMode mode) : p
         if (!(s2.st_mode & _S_IFREG)) fail(path, "expected regular file", EINVAL);
         view_.bytes = static_cast<std::uint64_t>(status.st_size);
         if (mode == ReadMode::Direct) {
-            view_.memory_alignment = 1;
-            view_.offset_alignment = 1;
+            view_.memory_alignment = 4096;
+            view_.offset_alignment = 4096;
         } else {
             view_.memory_alignment = 1;
             view_.offset_alignment = 1;
